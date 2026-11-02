@@ -1,6 +1,14 @@
+<div align="center">
+
 # elo-stack-installer
 
-🇪🇸 [Leer en español](README.es.md)
+**Unofficial web wizard to install ELO on Docker (first), Hyper-V, VirtualBox and WSL, and to put ELO links on the machines.**
+
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=flat-square)](LICENSE) ![Status](https://img.shields.io/badge/status-active_development-orange?style=flat-square) ![Node.js 18+](https://img.shields.io/badge/Node.js_18+-339933?style=flat-square&logo=nodedotjs&logoColor=white) ![Express](https://img.shields.io/badge/Express-000000?style=flat-square&logo=express&logoColor=white) ![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white) ![Docker Compose](https://img.shields.io/badge/Docker_Compose-2496ED?style=flat-square&logo=docker&logoColor=white) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white) ![Elasticsearch](https://img.shields.io/badge/Elasticsearch-005571?style=flat-square&logo=elasticsearch&logoColor=white) ![PowerShell](https://img.shields.io/badge/PowerShell-5391FE?style=flat-square&logo=powershell&logoColor=white) ![Hyper-V](https://img.shields.io/badge/Hyper--V-0078D6?style=flat-square&logo=windows&logoColor=white) ![VirtualBox](https://img.shields.io/badge/VirtualBox-21416B?style=flat-square&logo=virtualbox&logoColor=white) ![WSL2](https://img.shields.io/badge/WSL2-0078D6?style=flat-square&logo=windows&logoColor=white) ![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=flat-square&logo=playwright&logoColor=white) ![Python venv](https://img.shields.io/badge/Python_venv-3776AB?style=flat-square&logo=python&logoColor=white)
+
+🇪🇸 [Español](README.es.md) · [Images](#where-the-images-are) · [What works](#what-works-tested) · [Roadmap](#roadmap) · [Tech stack](#tech-stack) · [License](#license)
+
+</div>
 
 > **Unofficial** tool, independent of ELO Digital Office GmbH. "ELO" is a trademark of its owner.
 
@@ -157,6 +165,19 @@ Tested on a Windows Server VM (native ELO 25, Chrome + Edge) and on WSL Ubuntu (
 - [ ] Automated tests for the scan/apply scripts (`testDir` is already supported on Windows).
 - [ ] Kubernetes variant (ELO Cloud on Kubernetes operator + Helm), including multitenancy.
 - [ ] Full-stack run with the ELO 25 license documented with real times, memory and URLs.
+
+## Tech stack
+
+| Area | Technology |
+|---|---|
+| Installer | Node.js, Express, WebSocket (`ws`), single-page vanilla JS UI (EN / DE / ES) |
+| Web terminal | xterm.js, node-pty, SSH, PowerShell Direct |
+| ELO stack | Docker, Docker Compose, PostgreSQL, Elasticsearch 8, official `eck-services` images (Wolfi OS, OpenJDK, Tomcat) |
+| Targets | WSL2, Docker Desktop, Hyper-V, Oracle VirtualBox, Linux over SSH, native Linux; Kubernetes (planned: ELO Cloud on Kubernetes operator + Helm) |
+| VM provisioning | cloud-init, `qemu-img`, DISM + `unattend.xml`, Windows Server 2016-2025 |
+| Desktop access | TigerVNC + noVNC through an SSH tunnel, Xfce / LXQt / GNOME |
+| ELO links | PowerShell (Windows), Bash + Python venv (Linux), browser policies for Firefox / Chrome / Chromium |
+| Tests | Playwright (Admin Console login and EULA), `curl` against the IX API |
 
 ## License
 

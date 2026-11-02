@@ -1,6 +1,14 @@
+<div align="center">
+
 # elo-stack-installer
 
-🇬🇧 [Read in English](README.md) (versión por defecto)
+**Asistente web no oficial para instalar ELO en Docker (prioridad), Hyper-V, VirtualBox y WSL, y poner enlaces ELO en las máquinas.**
+
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=flat-square)](LICENSE) ![Status](https://img.shields.io/badge/status-active_development-orange?style=flat-square) ![Node.js 18+](https://img.shields.io/badge/Node.js_18+-339933?style=flat-square&logo=nodedotjs&logoColor=white) ![Express](https://img.shields.io/badge/Express-000000?style=flat-square&logo=express&logoColor=white) ![Docker](https://img.shields.io/badge/Docker-2496ED?style=flat-square&logo=docker&logoColor=white) ![Docker Compose](https://img.shields.io/badge/Docker_Compose-2496ED?style=flat-square&logo=docker&logoColor=white) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-4169E1?style=flat-square&logo=postgresql&logoColor=white) ![Elasticsearch](https://img.shields.io/badge/Elasticsearch-005571?style=flat-square&logo=elasticsearch&logoColor=white) ![PowerShell](https://img.shields.io/badge/PowerShell-5391FE?style=flat-square&logo=powershell&logoColor=white) ![Hyper-V](https://img.shields.io/badge/Hyper--V-0078D6?style=flat-square&logo=windows&logoColor=white) ![VirtualBox](https://img.shields.io/badge/VirtualBox-21416B?style=flat-square&logo=virtualbox&logoColor=white) ![WSL2](https://img.shields.io/badge/WSL2-0078D6?style=flat-square&logo=windows&logoColor=white) ![Playwright](https://img.shields.io/badge/Playwright-2EAD33?style=flat-square&logo=playwright&logoColor=white) ![Python venv](https://img.shields.io/badge/Python_venv-3776AB?style=flat-square&logo=python&logoColor=white)
+
+🇬🇧 [English](README.md) · [Estado actual](#estado-actual-probado) · [Tecnologías](#tecnologías) · [Licencia](#licencia)
+
+</div>
 
 > Herramienta **no oficial**, independiente de ELO Digital Office GmbH. «ELO» es marca de su titular.
 
@@ -276,6 +284,19 @@ Pendiente de esta función:
 - [ ] Copia local / registro local y respaldo `docker save`.
 - [ ] Exposición de puertos y panel de acceso/credenciales.
 - [ ] Variante Kubernetes (ECK + Helm).
+
+## Tecnologías
+
+| Área | Tecnología |
+|---|---|
+| Instalador | Node.js, Express, WebSocket (`ws`), interfaz de una página en JS puro (EN / DE / ES) |
+| Terminal web | xterm.js, node-pty, SSH, PowerShell Direct |
+| Pila ELO | Docker, Docker Compose, PostgreSQL, Elasticsearch 8, imágenes oficiales `eck-services` (Wolfi OS, OpenJDK, Tomcat) |
+| Destinos | WSL2, Docker Desktop, Hyper-V, Oracle VirtualBox, Linux por SSH, Linux nativo; Kubernetes (previsto: operador ELO Cloud on Kubernetes + Helm) |
+| Aprovisionamiento de VMs | cloud-init, `qemu-img`, DISM + `unattend.xml`, Windows Server 2016-2025 |
+| Acceso al escritorio | TigerVNC + noVNC por túnel SSH, Xfce / LXQt / GNOME |
+| Enlaces ELO | PowerShell (Windows), Bash + venv de Python (Linux), políticas de navegador para Firefox / Chrome / Chromium |
+| Pruebas | Playwright (login en la Admin Console y EULA), `curl` contra la API de IX |
 
 ## Licencia
 
