@@ -1,11 +1,16 @@
-# ELO on Docker / Kubernetes — automated installer
+# elo-stack-installer
 
-Proyecto (pensado para separarse en su propio repositorio) para **crear y ejecutar entornos ELO funcionales en
+> Herramienta **no oficial**, independiente de ELO Digital Office GmbH. «ELO» es marca de su titular.
+
+Asistente para **instalar ELO en Docker (prioridad), Hyper-V, VirtualBox y WSL**: sirve para **crear y ejecutar entornos ELO funcionales en
 contenedores** a partir de las imágenes oficiales de ELO, con un **instalador web paso a paso** que comprueba los
 requisitos, lista las imágenes disponibles, pide credenciales y licencia, instala, prueba y expone los servicios.
 
 > Las imágenes de ELO están en un registro privado y requieren cuenta de **partner/cliente de ELO**.
 > Este proyecto no contiene imágenes, credenciales ni licencias (`.env`, `*.pk`, `*.txt`, `*.lic` están en `.gitignore`).
+
+**Arranque:** `installer\start-installer.bat` (Windows, pide administrador) o `installer/start-installer.sh` (Linux); la primera vez
+hace `npm install`. Interfaz en http://localhost:3200. Requiere Node.js 18+.
 
 ## Dónde están las imágenes
 
@@ -237,7 +242,7 @@ Diseño de los pasos (referencia):
     en el asistente ("origen: registry.elo.com | registro local | archivos").
 - Inventario local con las mismas columnas que el remoto y marca de "solo en local" si desaparecen del registro.
 
-### Acceso desde fuera (como en el Hyper-V Configurator)
+### Acceso desde fuera
 
 - Exponer los servicios del contenedor en la red del host (Docker publica los puertos; en WSL2, `portproxy` + firewall
   del host como ya hace el configurador para las VMs).

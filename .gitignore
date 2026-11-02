@@ -1,0 +1,22 @@
+node_modules/
+
+# Local secrets, licenses and generated data (never commit)
+.env
+elo-license.lic
+uploaded-license.pk
+*.pk
+*.lic
+/*.txt
+.elo-credentials.json
+machines.json
+inventory.json
+
+# Saved image archives (tens of GB)
+backup/
+
+# Several ELO instances: their env files and last-run logs
+instances/
+last-run-*.log
+
+# ELO partner documentation (proprietary)
+docs/

@@ -21,7 +21,7 @@ const IMAGES = {
 };
 const psq = s => String(s).replace(/'/g, "''");
 const userRun = async script => {   // PowerShell as the signed-in user (WSL distros are per user)
-  const seat = x.getSeatLib() || (() => { try { return require('../../seat-lib'); } catch { return null; } })();
+  const seat = x.getSeatLib() || (() => { try { return require('./winuser'); } catch { return null; } })();
   if (seat && x.getMode() === 'wsl-user') return seat.runAsUser(script, 1800);
   return (await x.ps(script, 1800000)).out;
 };

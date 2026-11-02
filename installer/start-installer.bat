@@ -7,6 +7,7 @@ if errorlevel 1 (
     powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -Verb RunAs"
     exit /b 0
 )
+if not exist "%~dp0node_modules\express" (pushd "%~dp0" & call npm install --no-fund --no-audit & popd)
 start "" http://localhost:3200
 node "%~dp0server.js"
 endlocal

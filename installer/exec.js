@@ -3,7 +3,7 @@
 //  - Linux (Ubuntu/Debian…): bash directly, Docker Engine on the host.
 //  - Windows: inside a WSL2 distro. If the distro belongs to the current Windows user, wsl.exe is called
 //    directly; if this process runs elevated as another account (distros are per user), commands go through a
-//    scheduled task as the signed-in user (seat-lib runWsl), which is slower.
+//    scheduled task as the signed-in user (winuser.js runWsl), which is slower.
 // Long jobs run detached with their log in a shared file the backend streams to the browser.
 const { spawn, execFile } = require('child_process');
 const fs = require('fs');
@@ -60,7 +60,7 @@ async function detect() {
     .split(/\r?\n/).map(s => s.trim()).filter(s => s && !/^docker-desktop/i.test(s));
   if (!distro) distro = own.find(d => /ubuntu|debian/i.test(d)) || own[0] || null;
   if (distro && own.includes(distro)) { mode = 'wsl'; return { mode, distro }; }
-  try { seatLib = require('../../seat-lib'); } catch {}
+  try { seatLib = require('./winuser'); } catch {}
   if (seatLib) {
     if (!distro) {
       try { distro = JSON.parse(fs.readFileSync(path.join(RUN_DIR, 'seat-state.json'), 'utf8')).distro || null; } catch {}
