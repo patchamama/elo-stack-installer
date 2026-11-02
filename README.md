@@ -309,3 +309,9 @@ Pendiente de esta función:
 - [ ] Copia local / registro local y respaldo `docker save`.
 - [ ] Exposición de puertos y panel de acceso/credenciales.
 - [ ] Variante Kubernetes (ECK + Helm).
+
+## Licencia
+
+elo-stack-installer es software libre bajo la **GNU General Public License v3.0 o posterior** (`GPL-3.0-or-later`, ver [LICENSE](LICENSE)).
+Puedes usarlo, estudiarlo y modificarlo; si distribuyes una versión modificada, debes publicarla bajo la misma licencia con su código fuente.
+No incluye ni redistribuye software, imágenes ni licencias de ELO: «ELO» es marca de ELO Digital Office GmbH y sus imágenes requieren una cuenta de partner/cliente.

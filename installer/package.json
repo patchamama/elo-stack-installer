@@ -2,6 +2,7 @@
   "name": "elo-stack-installer",
   "version": "0.1.0",
   "private": true,
+  "license": "GPL-3.0-or-later",
   "description": "Web wizard that installs ELO (Docker first; also Hyper-V, VirtualBox, WSL) and gives the machines their ELO links.",
   "scripts": { "start": "node server.js" },
   "dependencies": {
