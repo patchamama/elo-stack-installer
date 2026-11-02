@@ -20,7 +20,7 @@ browsers of the machines it manages.
 > ELO's images live in a private registry and need an ELO **partner/customer account**.
 > This project contains no images, credentials or licenses (`.env`, `*.pk`, `*.txt`, `*.lic` are in `.gitignore`).
 
-**Start:** `installer\start-installer.bat` (Windows, asks for administrator rights) or `installer/start-installer.sh`
+**Start:** `start.bat` (Windows, asks for administrator rights) or `./start.sh`
 (Linux). The first run does `npm install`. UI at http://localhost:3200. Needs Node.js 18+.
 
 ## Where the images are

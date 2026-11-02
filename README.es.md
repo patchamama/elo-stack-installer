@@ -19,7 +19,7 @@ requisitos, lista las imágenes disponibles, pide credenciales y licencia, insta
 > Las imágenes de ELO están en un registro privado y requieren cuenta de **partner/cliente de ELO**.
 > Este proyecto no contiene imágenes, credenciales ni licencias (`.env`, `*.pk`, `*.txt`, `*.lic` están en `.gitignore`).
 
-**Arranque:** `installer\start-installer.bat` (Windows, pide administrador) o `installer/start-installer.sh` (Linux); la primera vez
+**Arranque:** `start.bat` (Windows, pide administrador) o `./start.sh` (Linux); la primera vez
 hace `npm install`. Interfaz en http://localhost:3200. Requiere Node.js 18+.
 
 ## Dónde están las imágenes
