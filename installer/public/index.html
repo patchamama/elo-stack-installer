@@ -571,6 +571,7 @@ async function renderAdmin(reload) {
       <button class="btn small right" onclick="renderAdmin(true)">${t('m.refresh')}</button></div>
     <p class="lead">${t('m.lead')}</p>
   <div class="card" id="adm-mem"><b>${t('hm.title')}</b> <span class="muted">${t('a.loading')}</span></div>
+  <div class="card" id="adm-stack"><b>${t('stk.title')}</b> <span class="muted">${t('a.loading')}</span></div>
   <div class="card" id="adm-inst"><b>${t('inst.title')}</b> <span class="muted">${t('a.loading')}</span></div>
   <div class="card" id="adm-wsl" hidden></div>
   <div class="grid2">
@@ -615,6 +616,7 @@ async function renderAdmin(reload) {
       <div class="row"><button class="btn small" onclick="expose()">${t('m.expose')}</button><button class="btn small" onclick="show('containers')">${t('tab.containers')} →</button></div></div>
   </div>`;
   renderInstallations(reload);
+  renderStack();
 }
 // Memory of this computer: stacked bar by consumer (WSL, Hyper-V VMs, VirtualBox, Docker Desktop), system, free + legend.
 async function renderHostMem(reload) {
@@ -891,6 +893,73 @@ async function wslAction(action, sure) {
   CACHE.status = null; await renderWsl(true); await renderInstallations(true);
 }
 const admOut = txt => { const o = $('adm-out'); if (o) { o.hidden = false; o.textContent = txt; } };
+// ── ELO stack: choose / switch the active stack, delete it, recover lost credentials ──
+const STK = { tick: null, poll: null, until: 0 };
+function stkStop() { clearInterval(STK.tick); clearInterval(STK.poll); STK.tick = STK.poll = null; }
+async function renderStack() {
+  const el = $('adm-stack'); if (!el) return;
+  const r = await api('/instances');
+  if (!r.ok) { el.innerHTML = `<b>${t('stk.title')}</b> <span class="tbad">${esc(r.error)}</span>`; return; }
+  STK.scope = r.scope || 'local';
+  el.innerHTML = `<div class="row"><b>${t('stk.title')}</b>
+      <select id="stk-sel">${r.instances.map(i => `<option value="${esc(i.name)}" ${i.name === r.current ? 'selected' : ''}>${esc(i.name)} · ELO ${esc(i.tag || '?')} · ${i.running}/${i.total}${i.name === r.current ? ' ★' : ''}</option>`).join('')}</select>
+      <button class="btn small primary" onclick="stkSwitch()">${t('stk.activate')}</button>
+      <button class="btn small" onclick="stkRecover()" title="${esc(t('stk.recoverHint'))}">${t('stk.recover')}</button>
+      <button class="btn small danger" onclick="stkDelete()">${t('stk.delete')}</button></div>
+    <div id="stk-msg" class="muted" style="margin-top:8px">${STK.last || t('stk.note')}</div>`;
+  const s = await api('/stack/switch');   // a switch started before a page reload keeps counting
+  if (s.ok && s.switch && ['stopping', 'starting', 'waiting'].includes(s.switch.phase) && !STK.tick) stkWatch(s.switch.startedAt, s.switch.to);
+}
+const stkMsg = h => { STK.last = h; const m = $('stk-msg'); if (m) m.innerHTML = h; };
+async function stkSwitch() {
+  const name = $('stk-sel').value;
+  const r = await api('/stack/switch', { name });
+  if (!r.ok) return stkMsg(`<span class="tbad">${esc(r.error)}</span>`);
+  stkWatch(r.switch.startedAt, name);
+}
+// 5-minute countdown; every 30 s the backend checks IX (and Automation Services / Flows when enabled).
+function stkWatch(startedAt, name) {
+  stkStop(); STK.until = startedAt + 5 * 60000;
+  let phase = 'stopping', health = null;
+  const draw = () => {
+    const left = Math.max(0, Math.round((STK.until - Date.now()) / 1000)), mm = `${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    const dot = (ok, need, n) => need ? `<span class="${ok ? 'tok' : 'muted'}">${ok ? '✔' : '…'} ${n}</span>` : '';
+    stkMsg(`<span class="dot warn"></span> ${t(phase === 'stopping' ? 'stk.stopping' : phase === 'starting' ? 'stk.starting' : 'stk.waiting', { name: esc(name), left: mm })}
+      ${health ? ' · ' + dot(health.ix, true, 'IX') + ' ' + dot(health.as, health.need.as, 'AS') + ' ' + dot(health.flows, health.need.flows, 'Flows') : ''}`);
+    if (left === 0) { stkStop(); stkMsg(`<span class="twarn">${t('stk.timeout', { name: esc(name) })}</span>`); }
+  };
+  const check = async () => {
+    const s = await api('/stack/switch'); if (!s.ok || !s.switch) return;
+    phase = s.switch.phase; health = s.health || null;
+    if (phase === 'error') { stkStop(); return stkMsg(`<span class="tbad">${esc(s.switch.error)}</span>`); }
+    if (phase === 'done' || health?.active) { stkStop(); CACHE.status = null; stkMsg(`<span class="dot ok"></span> <b class="tok">${t('stk.active', { name: esc(name) })}</b>`); renderAdmin(true); }
+  };
+  draw(); STK.tick = setInterval(draw, 1000);
+  setTimeout(check, 3000); STK.poll = setInterval(check, 30000);
+}
+async function stkDelete() {
+  const name = $('stk-sel').value;
+  if (!confirm(t('stk.confirmDelete', { name }))) return;
+  stkMsg(t('m.working'));
+  const r = await api('/installations/delete', { id: `${STK.scope}:${name}`, images: false });
+  stkMsg(r.ok ? `<span class="tok">${t('stk.deleted', { name: esc(name) })}</span>` : `<span class="tbad">${esc(r.error)}</span>`);
+  CACHE.status = null; CACHE.inst = null; setTimeout(() => renderAdmin(true), 1500);
+}
+// Recover the credentials from the containers' environment, then test that the stack answers with them.
+async function stkRecover() {
+  if (!confirm(t('stk.confirmRecover'))) return;
+  stkMsg(t('m.working'));
+  const r = await api('/stack/credentials/recover', {});
+  if (!r.ok) return stkMsg(`<span class="tbad">${esc(r.error)}</span>`);
+  stkMsg(`<span class="tok">${t('stk.recovered', { n: r.recovered, file: esc(r.file) })}</span><br><span class="muted">${t('stk.testing')}</span>`);
+  CACHE.status = null;
+  const [h, ix] = await Promise.all([api('/stack/health'), api('/ixtest', {})]);
+  const login = ix.ok && ix.steps?.[1]?.ok;
+  stkMsg(`<span class="tok">${t('stk.recovered', { n: r.recovered, file: esc(r.file) })}</span><br>
+    <span class="dot ${h.active ? 'ok' : 'bad'}"></span> ${t(h.active ? 'stk.running' : 'stk.notRunning')} (IX ${h.ix ? '✔' : '✘'} · AS ${h.as ? '✔' : '✘'} · Flows ${h.flows ? '✔' : '✘'})
+    <br><span class="dot ${login ? 'ok' : 'bad'}"></span> ${t(login ? 'stk.loginOk' : 'stk.loginFail')}${!login && ix.steps?.[1] ? ` <span class="muted">${esc(ix.steps[1].summary)}</span>` : ''}`);
+  renderAdmin(true);
+}
 async function svc(action, s) { admOut(t('m.working')); const r = await api('/service', { action, services: [s] }); if (!r.ok) admOut(r.error); renderAdmin(true); }
 async function engine(action) { admOut(t('m.working')); const r = await api('/engine', { action }); admOut(r.ok ? r.out : r.error); setTimeout(() => renderAdmin(true), 1000); }
 async function logs(s) { const r = await api('/logs/' + s), o = $('adm-log'); o.hidden = false; o.textContent = r.ok ? r.out : r.error; o.scrollTop = 1e9; }

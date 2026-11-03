@@ -1065,7 +1065,100 @@ let CURRENT_CHANGED = 0;
 app.get('/api/instances', wrap(async () => {
   await x.detect();
   const insts = parseInstances(await x.sh(instProbe(x.eloDir()), 90));
-  return { ok: true, current: curInstance(), instances: insts.map(i => ({ name: i.name, tag: i.tag, repo: i.repo, ports: i.ports, running: i.running, total: i.total })) };
+  return { ok: true, scope: instScope(), current: curInstance(), instances: insts.map(i => ({ name: i.name, tag: i.tag, repo: i.repo, ports: i.ports, running: i.running, total: i.total })) };
+}));
+
+// ── ELO stack: health, switch the active stack, recover lost credentials ──────
+const instScope = () => x.getMode() === 'ssh' ? 'ssh' : 'local';
+// Are IX, Automation Services and Flows of an instance answering? (curl from the Linux side; AS/Flows only if enabled.)
+async function stackHealth(inst) {
+  const e = await readEnv(inst).catch(() => null), pt = portsOf(e), repo = e?.REPO || 'repository';
+  const prof = String(e?.COMPOSE_PROFILES || 'as,flows').split(',');
+  const out = await x.sh(`c() { curl -s -o /dev/null -m 8 -w '%{http_code}' "$1" 2>/dev/null || true; }
+echo "ix=$(c 'http://localhost:${pt.server}/${repo}/ix?cmd=status')"; echo "as=$(c http://localhost:${pt.as}/)"; echo "flows=$(c http://localhost:${pt.flows}/)"`, 90);
+  const code = k => +((out.match(new RegExp('^' + k + '=(\\d+)', 'm')) || [])[1]) || 0;
+  const r = { ix: code('ix') === 200, as: code('as') > 0 && code('as') < 500, flows: code('flows') > 0 && code('flows') < 500 };
+  const need = { ix: true, as: prof.includes('as'), flows: prof.includes('flows') };
+  return { instance: inst, ...r, need, active: r.ix && (!need.as || r.as) && (!need.flows || r.flows) };
+}
+app.get('/api/stack/health', wrap(async req => ({ ok: true, ...(await stackHealth(instOf(req.query.instance))) })));
+
+// Switch the active stack: stop the running ones, start the chosen one (background; the page polls GET /api/stack/switch).
+let SWITCH = null;
+app.post('/api/stack/switch', wrap(async req => {
+  const name = req.body?.name; if (!INST_RE.test(name || '') || name === 'elocache') throw new Error('bad instance');
+  if (SWITCH && ['stopping', 'starting'].includes(SWITCH.phase)) throw new Error('a switch is already in progress');
+  await x.detect();
+  const sc = instScope();
+  const sw = SWITCH = { to: name, from: curInstance(), startedAt: Date.now(), phase: 'stopping', error: null };
+  (async () => {
+    try {
+      const insts = parseInstances(await x.sh(instProbe(x.eloDir()), 90));
+      for (const i of insts.filter(i => i.name !== name && i.running > 0)) await instAction(`${sc}:${i.name}`, 'stop');
+      sw.phase = 'starting';
+      const r = await instAction(`${sc}:${name}`, 'start');
+      if (!r.ok) throw new Error(r.error);
+      setInstance(name); CURRENT_CHANGED = Date.now(); sw.phase = 'waiting';
+    } catch (err) { sw.phase = 'error'; sw.error = err.message; }
+  })();
+  return { ok: true, switch: sw };
+}));
+app.get('/api/stack/switch', wrap(async () => {
+  if (!SWITCH) return { ok: true, switch: null };
+  const health = ['waiting', 'done'].includes(SWITCH.phase) ? await stackHealth(SWITCH.to).catch(() => null) : null;
+  if (health?.active) SWITCH.phase = 'done';
+  return { ok: true, switch: SWITCH, health, now: Date.now() };
+}));
+
+// Recover lost credentials of the current instance: the containers (running or stopped) still carry them in their
+// environment. Rebuilds the env file from them (the old one is kept as .bak-<time>); nothing changes in the stack, so
+// the database and the ELO users keep working. Inventing new passwords would lock the stack out of its own data.
+app.post('/api/stack/credentials/recover', wrap(async () => {
+  await x.detect();
+  const inst = curInstance();
+  const out = await x.sh(`for s in server ix-setup ix-import search flows-worker as flows pgadmin postgres; do n=${inst}-$s
+  docker inspect "$n" >/dev/null 2>&1 || continue; echo "__C__ $s"
+  docker inspect -f '{{.Config.Image}}' "$n" | sed 's/^/__IMG__ /'
+  docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$n" | sed 's/^/__ENV__ /'
+  docker inspect -f '{{range $p,$b := .HostConfig.PortBindings}}{{$p}}={{(index $b 0).HostPort}} {{end}}' "$n" | sed 's/^/__PORTS__ /'
+done`, 120);
+  const cont = {}; let cur = null;
+  for (const l of out.split('\n').map(l => l.replace(/\r$/, ''))) {
+    let m;
+    if ((m = /^__C__ (.+)/.exec(l))) cur = cont[m[1]] = { env: {}, ports: {}, image: '' };
+    else if (cur && (m = /^__IMG__ (.+)/.exec(l))) cur.image = m[1];
+    else if (cur && (m = /^__ENV__ ([A-Za-z_][\w.]*)=(.*)$/.exec(l))) cur.env[m[1]] = m[2];
+    else if (cur && (m = /^__PORTS__ (.*)/.exec(l))) for (const pm of m[1].matchAll(/(\d+)\/tcp=(\d+)/g)) cur.ports[pm[1]] = pm[2];
+  }
+  if (!cont.server) throw new Error(`The containers of ${inst} do not exist (stopped and removed?): the passwords cannot be recovered. Reinstall the stack or enter them by hand.`);
+  const get = k => { for (const c of Object.values(cont)) if (c.env[k] !== undefined) return c.env[k]; return undefined; };
+  const tag = i => (i || '').split(':').pop();
+  const v = {
+    ELO_INSTANCE: inst, PORT_SERVER: cont.server.ports['9090'], PORT_AS: cont.as?.ports['9090'], PORT_FLOWS: cont.flows?.ports['9090'],
+    PORT_SEARCH: cont.search?.ports['9200'], PORT_SEARCH_T: cont.search?.ports['9204'], PORT_PGADMIN: cont.pgadmin?.ports['80'],
+    ELO_TAG: tag(cont.server.image), ELO_SEARCH_TAG: cont.search ? tag(cont.search.image) : undefined,
+    REPO: get('IX_APP_PATH') || get('REPO_NAME'), REPO_LANGUAGE: get('REPO_LANGUAGE'), ELO_DISPLAY_NAME: get('ELO_DISPLAY_NAME'), ELO_LICENSE_TYPE: get('ELO_LICENSE_TYPE'),
+    COMPOSE_PROFILES: ['as', 'flows', 'pgadmin'].filter(p => cont[p]).join(','),
+    AUTH_ADMIN_USERNAME: get('AUTH_ADMIN_USERNAME'), AUTH_ADMIN_PASSWORD: get('AUTH_ADMIN_PASSWORD'),
+    AUTH_SERVICE_USERNAME: get('AUTH_SERVICE_USERNAME'), AUTH_SERVICE_PASSWORD: get('AUTH_SERVICE_PASSWORD'), AUTH_SERVICE_PASSWORD_BCRYPT: get('AUTH_SERVICE_PASSWORD_BCRYPT'),
+    DATABASE_USERNAME: get('DATABASE_USERNAME'), DATABASE_PASSWORD: get('DATABASE_PASSWORD'), KEYSTORE_PASSWORD: get('KEYSTORE_PASSWORD'),
+    AUTH_TOMCAT_PASSWORD: get('AUTH_TOMCAT_PASSWORD'), AUTH_KARAF_PASSWORD: get('AUTH_KARAF_PASSWORD'), IX_URL_PUBLIC: get('IX_URL_PUBLIC'),
+  };
+  const missing = ['AUTH_ADMIN_PASSWORD', 'AUTH_SERVICE_PASSWORD', 'DATABASE_PASSWORD', 'KEYSTORE_PASSWORD', 'AUTH_TOMCAT_PASSWORD'].filter(k => !v[k]);
+  if (missing.length) throw new Error('Not found in the containers: ' + missing.join(', '));
+  // compose interpolates "$" in env files: double it (the bcrypt hash has several)
+  const body = Object.entries(v).filter(([, val]) => val !== undefined && val !== '').map(([k, val]) => `${k}=${String(val).replace(/\$/g, '$$$$')}`).join('\n') + '\n';
+  const rel = envRel(inst), stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+  if (x.getMode() === 'ssh') {
+    await x.sh(`cd ${x.REMOTE_DIR}; mkdir -p ${path.posix.dirname(rel)}; [ -f ${rel} ] && cp ${rel} ${rel}.bak-${stamp}; echo ${Buffer.from(body).toString('base64')} | base64 -d > ${rel}; chmod 600 ${rel}`, 30);
+  } else {
+    const f = path.join(ELO, rel); fs.mkdirSync(path.dirname(f), { recursive: true });
+    if (fs.existsSync(f)) fs.copyFileSync(f, `${f}.bak-${stamp}`);
+    fs.writeFileSync(f, body, { mode: 0o600 });
+  }
+  const g = readCreds();
+  if (g[inst]) { delete g[inst]; fs.writeFileSync(CREDS_FILE, JSON.stringify(g, null, 2)); }   // the saved fallback is obsolete now
+  return { ok: true, instance: inst, file: rel, recovered: Object.keys(v).filter(k => v[k] !== undefined && v[k] !== '').length, services: Object.keys(cont) };
 }));
 
 // Delete an installation to free disk space: an ELO instance (containers, data volumes, configuration, optionally its
