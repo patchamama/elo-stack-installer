@@ -684,7 +684,7 @@ async function ixPackages(e) {
   if (!m) return null;
   let j; try { j = JSON.parse(m[2].trim()).result; } catch { return null; }
   const list = j?.packageDataList || j?.packages || [];
-  return { endpoint: m[1], packages: list.map(p => ({ name: p.name || '', namespace: p.namespace || '', version: p.version || '' })) };
+  return { endpoint: m[1], packages: list.map(p => ({ name: p.name || '', namespace: p.namespace || '', version: p.pkgVersion || p.version || '' })) };
 }
 app.get('/api/stack/addons', wrap(async req => {
   const inst = instOf(req.query.instance);
@@ -708,11 +708,7 @@ echo "__FILES__"; for v in plugins data-ix data-eloam repository-basis; do find 
   // Authoritative source: the installed packages (name, namespace, version); the file/image names above are only a hint.
   let pk = null;
   try { const e = await readEnv(inst); if (e?.AUTH_ADMIN_PASSWORD) pk = await ixPackages(e); } catch {}
-  const addons = Object.keys(ADDONS).map(k => {
-    const hit = (pk?.packages || []).filter(p => PKG_KEYS[k].some(w => `${p.namespace} ${p.name}`.toLowerCase().includes(w)));
-    return { name: k, found: hit.length > 0 || !!evid[k], installed: hit.length > 0, versions: [...new Set(hit.map(p => p.version).filter(Boolean))],
-      evidence: [...hit.map(p => `package ${p.namespace} ${p.name} ${p.version}`.trim()), ...(evid[k] || [])].slice(0, 6) };
-  });
+  const addons = require('./addons').classify(pk?.packages, evid);
   return { ok: true, instance: inst, heuristic: !pk, packagesApi: pk ? pk.endpoint : null, ix, addons };
 }));
 app.post('/api/images/remove', wrap(async req => {

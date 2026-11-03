@@ -798,9 +798,22 @@ async function elCheck(id, keepOut) {
   $('el-list').innerHTML = reqHtml + `<table>${r.items.map(i => `<tr><td>${i.found ? '<span class="tok">✓</span>' : '<span class="muted">–</span>'}</td><td>${esc(i.name)}</td><td class="muted">${esc(i.detail)}</td><td>${/^https?:\/\//i.test(i.detail || '') ? `<a class="btn small" target="_blank" rel="noopener" href="${esc(i.detail)}" title="${esc(t('el.openTab'))}">↗</a>` : ''}</td></tr>`).join('')}</table>
     <div class="muted" style="margin-top:4px">${t('el.browsers')}: ${r.scan.browsers.length ? esc(r.scan.browsers.join(', ')) : t('el.none')}</div>
     ${r.os === 'linux' && !r.scan.desktopInstalled ? `<div class="tbad" style="margin-top:4px">${t('el.noDesktop')}</div>` : ''}`;
+  const ixUrl = (r.items.find(i => i.found && /^https?:\/\/[^/]+\/ix-[^/]+\//i.test(i.detail || '')) || {}).detail;
+  $('el-list').insertAdjacentHTML('beforeend', ixUrl ? `<div class="card" style="margin-top:8px"><b>${t('adn.machine')}</b>
+    <div class="row" style="gap:8px;margin:6px 0"><input id="el-ixu" placeholder="${t('acc.user')}" value="Administrator" style="max-width:160px"><input id="el-ixp" type="password" placeholder="${t('acc.password')}" autocomplete="new-password" style="max-width:200px">
+    <button class="btn small primary" onclick="elAddons('${esc(id)}','${esc(ixUrl)}')">${t('adn.check')}</button></div><div id="el-addons" class="muted"></div></div>` : '');
   if (!found.length) st.textContent = '· ' + t('el.noElo');
   else if (!r.pending) st.innerHTML = `· <span class="tok">✓ ${t('el.allDone')}</span>`;
   else { st.textContent = '· ' + t('el.pending', { n: r.pending }); $('el-apply').hidden = false; $('el-close-wrap').hidden = r.os !== 'windows'; }
+}
+// docXtractor / Business Solutions of an ELO in a machine, from the packages installed in its IX.
+async function elAddons(id, url) {
+  const el = $('el-addons'); el.textContent = t('adn.checking');
+  const r = await api('/elolinks/addons', { id, url, user: $('el-ixu').value.trim(), password: $('el-ixp').value });
+  if (!r.ok) { el.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
+  if (!r.packagesApi) { el.innerHTML = `<span class="twarn">${t('adn.noApi')}</span>`; return; }
+  el.innerHTML = r.addons.map(a => `<span class="row" style="gap:5px;margin:2px 12px 2px 0;display:inline-flex" title="${esc(a.evidence.join('\n'))}"><span class="dot ${a.found ? 'ok' : 'idle'}"></span>${esc(a.name)}${a.versions?.length ? ` <span class="muted">${esc(a.versions.join(', '))}</span>` : ''}</span>`).join('')
+    + ` <span class="muted">(${t('adn.packagesN', { n: r.total })})</span>`;
 }
 async function elPrepare(id) {
   $('el-creds').innerHTML = `<span class="muted">${t('el.installing')}</span>`;

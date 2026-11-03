@@ -383,6 +383,20 @@ ${VENV}/bin/python -c 'import sys,json;print(json.dumps({"ok":True,"python":sys.
     const scan = await runLinux(m, LIN_SCAN), plan = buildPlanLinux(scan);
     return { ok: true, os: 'linux', requirements, scan: { host: scan.host, desktopInstalled: scan.desktopInstalled, repos: plan.repos, browsers: Object.keys(scan.browsers), user: scan.user }, items: plan.items.map(pub), pending: pendingLinux(scan, plan) };
   }));
+  // Add-ons (docXtractor, Business Solutions) of an ELO installed in a machine: its IX is asked through the network,
+  // url = any ELO URL of the machine (https://srv01:9093/ix-Contelo/...); the host name is replaced by the machine's IP.
+  app.post('/api/elolinks/addons', localOnly, wrap(async req => {
+    const { id, url, user, password } = req.body || {};
+    if (!password) throw new Error('password of the ELO administrator required');
+    const m = await terminals.resolve(id), u = new URL(String(url));
+    const ip = m.ip || m.ssh?.host; if (!ip) throw new Error('the machine has no IP (is it running?)');
+    const ix = /^\/(ix-[^/]+|[^/]+)\//.exec(u.pathname + '/');
+    if (!ix) throw new Error('not an ELO URL');
+    const base = `${u.protocol}//${ip}:${u.port || (u.protocol === 'https:' ? 443 : 80)}/${ix[1]}/rest`;
+    const pk = await require('./addons').fetchPackages(base, user || 'Administrator', password);
+    const addons = require('./addons').classify(pk?.packages);
+    return { ok: true, host: ip, packagesApi: pk ? pk.endpoint : null, total: pk ? pk.packages.length : 0, addons };
+  }));
   app.post('/api/elolinks/prepare', localOnly, wrap(async req => {
     const m = await terminals.resolve(req.body?.id);
     if (isWin(m)) return { ok: true, note: 'nothing to install on Windows machines' };
