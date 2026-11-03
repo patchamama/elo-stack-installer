@@ -120,6 +120,8 @@ app.get('/api/checks', wrap(async () => {
 echo "os=$(. /etc/os-release; echo "$PRETTY_NAME")"
 echo "docker=$(docker version --format '{{.Server.Version}}' 2>/dev/null)"
 echo "compose=$(docker compose version --short 2>/dev/null)"
+echo "docker_cli=$(docker --version 2>/dev/null)"
+echo "docker_active=$(systemctl is-active docker 2>/dev/null || (pgrep dockerd >/dev/null && echo active) || echo inactive)"
 echo "mem_total=$(awk '/MemTotal/{print $2}' /proc/meminfo)"
 echo "mem_avail=$(awk '/MemAvailable/{print $2}' /proc/meminfo)"
 root=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /); echo "disk_free=$(df -k --output=avail "$root" 2>/dev/null | tail -1)"
@@ -141,17 +143,20 @@ echo "running=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -Eq '^elo[a-z
   }
   const gb = kb => Math.round(Number(kb || 0) / 1048576 * 10) / 10;
   const items = [
-    { id: 'linux', label: 'Linux environment', ok: env.mode !== 'none', fix: 'Install WSL2 + Ubuntu (Windows)',
-      value: env.mode === 'linux' ? v.os : env.mode === 'ssh' ? `SSH ${env.target.user}@${env.target.host} — ${v.os || '?'}` : `WSL2 ${env.distro || ''} — ${v.os || '?'}` },
-    { id: 'docker', label: 'Docker Engine', ok: !!v.docker, value: v.docker || 'missing', fix: 'install' },
-    { id: 'compose', label: 'Docker Compose', ok: !!v.compose, value: v.compose || 'missing', fix: 'install' },
+    // No answer from the probe at all = the Linux side is off/not reachable (WSL shut down), not "everything missing".
+    { id: 'linux', label: 'Linux environment', ok: env.mode !== 'none' && !!v.os, fix: !v.os && ['wsl', 'wsl-user'].includes(env.mode) ? 'start-wsl' : 'Install WSL2 + Ubuntu (Windows)',
+      value: env.mode === 'linux' ? v.os : env.mode === 'ssh' ? `SSH ${env.target.user}@${env.target.host} — ${v.os || '?'}` : `WSL2 ${env.distro || ''} — ${v.os || 'no answer (WSL off?)'}` },
+    // Installed but stopped is not "missing": offer to start it instead of installing it again.
+    { id: 'docker', label: 'Docker Engine', ok: !!v.docker, fix: v.docker ? undefined : v.docker_cli ? 'start' : 'install',
+      value: v.docker || (v.docker_cli ? `installed (${v.docker_cli.replace(/,.*/, '')}) — stopped` : v.os ? 'missing' : '?') },
+    { id: 'compose', label: 'Docker Compose', ok: !!v.compose, value: v.compose || (v.os ? 'missing' : '?'), fix: v.compose || !v.os ? undefined : 'install' },
     { id: 'memory', label: 'Memory (Linux side)', ok: gb(v.mem_total) >= 12, warn: gb(v.mem_avail) < 10, value: `${gb(v.mem_avail)} GB free of ${gb(v.mem_total)} GB (full stack ~10-16 GB)` },
     { id: 'disk', label: 'Disk space (Docker)', ok: gb(v.disk_free) >= 25, value: `${gb(v.disk_free)} GB free (images ~16 GB + data)` },
     { id: 'mmap', label: 'vm.max_map_count (Elasticsearch)', ok: Number(v.max_map_count) >= 262144, value: v.max_map_count, fix: 'set at start' },
     { id: 'ports', label: 'Ports 9090/9060/9010/9200/9204', ok: !Object.entries(v).some(([k, s]) => k.startsWith('port_') && s === 'used'),
       value: Object.entries(v).filter(([k]) => k.startsWith('port_')).map(([k, s]) => `${k.slice(5)}:${s}`).join(' ') },
-    { id: 'registry', label: 'registry.elo.com reachable', ok: ['200', '401'].includes(v.registry), value: `HTTP ${v.registry}` },
-    { id: 'license', label: 'ELO license server reachable', ok: v.license_server === '200', value: `HTTP ${v.license_server}` },
+    { id: 'registry', label: 'registry.elo.com reachable', ok: ['200', '401'].includes(v.registry), value: v.registry ? `HTTP ${v.registry}` : '?' },
+    { id: 'license', label: 'ELO license server reachable', ok: v.license_server === '200', value: v.license_server ? `HTTP ${v.license_server}` : '?' },
   ];
   if (host) items.push({ id: 'host', label: 'Windows host memory', ok: host.freeGB >= 12, warn: host.freeGB < 16,
     value: `${host.freeGB} GB free of ${host.totalGB} GB${host.vms?.length ? ` · running VMs: ${host.vms.join(', ')} GB` : ''}` });

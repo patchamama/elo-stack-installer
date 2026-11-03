@@ -326,9 +326,16 @@ async function requirements() {
   const r = await api('/checks'); W.checks = r;
   if (!r.ok) { $('checks').innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
   $('checks').innerHTML = r.items.map(c => `<div class="check"><span class="dot ${c.ok ? (c.warn ? 'warn' : 'ok') : 'bad'}"></span>
-    <div>${esc(c.label)}${!c.ok && c.fix === 'install' ? ` <button class="btn small" onclick="installDocker()">${t('r.installDocker')}</button>` : ''}</div><div class="v">${esc(c.value)}</div></div>`).join('') +
+    <div>${esc(c.label)}${!c.ok && c.fix === 'install' ? ` <button class="btn small" onclick="installDocker()">${t('r.installDocker')}</button>` : ''}${!c.ok && c.fix === 'start' ? ` <button class="btn small primary" onclick="reqStart('start-docker')">${t('r.startDocker')}</button>` : ''}${!c.ok && c.fix === 'start-wsl' ? ` <button class="btn small primary" onclick="reqStart('start-wsl')">${t('r.startWsl')}</button>` : ''}</div><div class="v">${esc(c.value)}</div></div>`).join('') +
     `<div id="dockerjob"></div>${r.installed ? `<p class="muted">${t('r.existing', { state: r.running ? t('r.running') : t('r.stopped') })}</p>` : ''}`;
   setNav(!r.items.some(c => !c.ok && ['linux', 'docker', 'compose', 'disk'].includes(c.id)));
+}
+// Start what is installed but stopped (Docker daemon / WSL) and check again.
+async function reqStart(what) {
+  $('dockerjob').innerHTML = `<span class="muted">${t('m.working')}</span>`;
+  const r = what === 'start-wsl' ? await api('/wsl', { action: 'start' }) : await api('/engine', { action: 'start-docker' });
+  if (!r.ok) { $('dockerjob').innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
+  CACHE.status = null; requirements();
 }
 function installDocker() { runJob('/install-docker', {}, $('dockerjob'), () => requirements()); }
 
