@@ -377,13 +377,13 @@ REPO=$(ev REPO); AUTH_SERVICE_USERNAME=$(ev AUTH_SERVICE_USERNAME); AUTH_SERVICE
 step "Waiting for the repository setup and the services"
 for i in $(seq 1 80); do
   sleep 15
-  ix=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "http://localhost:\${PORT_SERVER:-9090}/$REPO/ix?cmd=status")
-  web=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "http://localhost:\${PORT_SERVER:-9090}/$REPO/plugin/de.elo.ix.plugin.proxy/web/")
-  setup=$(docker inspect -f '{{.State.Status}}/{{.State.ExitCode}}' $ELO_INSTANCE-ix-setup 2>/dev/null)
+  ix=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "http://localhost:\${PORT_SERVER:-9090}/$REPO/ix?cmd=status") || true
+  web=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "http://localhost:\${PORT_SERVER:-9090}/$REPO/plugin/de.elo.ix.plugin.proxy/web/") || true
+  setup=$(docker inspect -f '{{.State.Status}}/{{.State.ExitCode}}' $ELO_INSTANCE-ix-setup 2>/dev/null) || true
   echo "__CHECK__ {\\"ix\\":\\"$ix\\",\\"web\\":\\"$web\\",\\"setup\\":\\"$setup\\",\\"t\\":$((i*15))}"
   case "$setup" in exited/0) [ "$ix" = 200 ] && break ;; exited/*) echo "ix-setup failed:"; docker logs --tail 30 $ELO_INSTANCE-ix-setup; exit 1 ;; esac
 done
-search=$(curl -sk --max-time 8 -u "$AUTH_SERVICE_USERNAME:$AUTH_SERVICE_PASSWORD" https://localhost:\${PORT_SEARCH:-9200}/_cluster/health | sed -n 's/.*"status":"\\([a-z]*\\)".*/\\1/p')
+search=$(curl -sk --max-time 8 -u "$AUTH_SERVICE_USERNAME:$AUTH_SERVICE_PASSWORD" https://localhost:\${PORT_SEARCH:-9200}/_cluster/health | sed -n 's/.*"status":"\\([a-z]*\\)".*/\\1/p') || true
 echo "__CHECK__ {\\"search\\":\\"\${search:-down}\\"}"
 }
 set +e; (main) 2>&1 | tee -a "$LAST"; rc=\${PIPESTATUS[0]}
