@@ -668,6 +668,24 @@ app.post('/api/cache/delete', wrap(async req => {
 // Development). Heuristic: names of the stack's images/containers and of the files in its plugin/data volumes.
 const ADDONS = { docXtractor: /docx?tractor/i, 'BS Invoice': /invoice|rechnung/i, 'BS Contract': /contract|vertrag/i, 'BS Common': /bs[-_.]?common|business[-_.]?solutions?[-_.]?common/i,
   'BS Contact': /bs[-_.]?contact|business[-_.]?solutions?[-_.]?contact/i, 'BS DATEV': /datev/i, 'BS Development': /bs[-_.]?development|business[-_.]?solutions?[-_.]?dev/i };
+// Packages installed in the repository: PackageService.checkoutPackages (ELO 25: empty name list = all; ELO 23: ["*"]).
+// Several endpoint names are tried because the REST interface of the ECK images is not documented here.
+const PKG_KEYS = { docXtractor: ['docx', 'docxtractor', 'aiml', 'intelligent'], 'BS Common': ['common'], 'BS Invoice': ['invoice'], 'BS Contract': ['contract'],
+  'BS Contact': ['contact'], 'BS DATEV': ['datev'], 'BS Development': ['development'] };
+async function ixPackages(e) {
+  const u = e.AUTH_ADMIN_USERNAME || 'Administrator', repo = e.REPO || 'repository', base = `http://localhost:${portsOf(e).server}/${repo}/rest`;
+  const v23 = /^v2[0-3]-/.test(e.ELO_TAG || '');
+  const bodies = (v23 ? [['*'], []] : [[], ['*']]).map(n => JSON.stringify({ packageZ: { bset: '2097151' }, checkoutInfo: { nameOrGuids: n } }));
+  const eps = ['PackageService/checkoutPackages', 'IXServicePortIF/checkoutPackages', 'PackageServicePortIF/checkoutPackages'];
+  const tries = [];
+  for (const ep of eps) for (const b of bodies) tries.push(`o=$(curl -s -m 30 -u "$U:$P" -X POST -H 'Content-Type: application/json' -d '${b}' '${base}/${ep}'); case "$o" in '{"result"'*) echo "__OK__ ${ep}"; echo "$o"; exit 0;; esac`);
+  const out = await x.sh(`U=${x.shq(u)}; P=${x.shq(e.AUTH_ADMIN_PASSWORD)}\n` + tries.join('\n') + '\necho __NONE__', 240);
+  const m = /__OK__ (\S+)\n([\s\S]*)$/.exec(out);
+  if (!m) return null;
+  let j; try { j = JSON.parse(m[2].trim()).result; } catch { return null; }
+  const list = j?.packageDataList || j?.packages || [];
+  return { endpoint: m[1], packages: list.map(p => ({ name: p.name || '', namespace: p.namespace || '', version: p.version || '' })) };
+}
 app.get('/api/stack/addons', wrap(async req => {
   const inst = instOf(req.query.instance);
   await x.detect();
@@ -687,7 +705,15 @@ echo "__FILES__"; for v in plugins data-ix data-eloam repository-basis; do find 
     }
   } catch {}
 
-  return { ok: true, instance: inst, heuristic: true, ix, addons: Object.keys(ADDONS).map(k => ({ name: k, found: !!evid[k], evidence: (evid[k] || []).slice(0, 5) })) };
+  // Authoritative source: the installed packages (name, namespace, version); the file/image names above are only a hint.
+  let pk = null;
+  try { const e = await readEnv(inst); if (e?.AUTH_ADMIN_PASSWORD) pk = await ixPackages(e); } catch {}
+  const addons = Object.keys(ADDONS).map(k => {
+    const hit = (pk?.packages || []).filter(p => PKG_KEYS[k].some(w => `${p.namespace} ${p.name}`.toLowerCase().includes(w)));
+    return { name: k, found: hit.length > 0 || !!evid[k], installed: hit.length > 0, versions: [...new Set(hit.map(p => p.version).filter(Boolean))],
+      evidence: [...hit.map(p => `package ${p.namespace} ${p.name} ${p.version}`.trim()), ...(evid[k] || [])].slice(0, 6) };
+  });
+  return { ok: true, instance: inst, heuristic: !pk, packagesApi: pk ? pk.endpoint : null, ix, addons };
 }));
 app.post('/api/images/remove', wrap(async req => {
   const refs = (req.body?.refs || []).filter(r => /^[\w./:-]+$/.test(r));
@@ -910,8 +936,10 @@ ConvertTo-Json -Compress -Depth 3 $o`, 60000);
 async function openViewer(id) {
   const launch = (exe, args) => { require('child_process').spawn(exe, args, { detached: true, stdio: 'ignore' }).unref(); };
   const [kind, name] = String(id).split(/:(.+)/);
-  if (kind === 'hyperv') { launch('vmconnect.exe', ['localhost', name]); return { opened: 'vmconnect' }; }
-  if (kind === 'vbox') { launch('C:\\Program Files\\Oracle\\VirtualBox\\VirtualBox.exe', []); return { opened: 'VirtualBox Manager' }; }
+  // The window has to appear on the desktop of the interactive user, not in the backend's own session.
+  const inSession = async cmd => { await x.detect(); if (x.getMode() === 'wsl-user') await x.getSeatLib().runAsUser(cmd, 60); else await x.ps(cmd); };
+  if (kind === 'hyperv') { await inSession(`Start-Process vmconnect.exe -ArgumentList 'localhost','${String(name).replace(/'/g, "''")}'`); return { opened: 'vmconnect ' + name }; }
+  if (kind === 'vbox') { await inSession(`Start-Process 'C:\\Program Files\\Oracle\\VirtualBox\\VirtualBox.exe'`); return { opened: 'VirtualBox Manager' }; }
   if (id === 'desktop') { launch('C:\\Program Files\\Docker\\Docker\\Docker Desktop.exe', []); return { opened: 'Docker Desktop' }; }
   const inst = kind === 'local' || kind === 'ssh' ? instOf(name) : curInstance();
   const e = await readEnv(inst).catch(() => null);

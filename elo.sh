@@ -44,7 +44,10 @@ license_file() {
 
 make_env() {
   LIC=$(license_file)
-  [ -n "$LIC" ] && [ -f "$LIC" ] || { echo "ERROR: no license: put elo-license.lic or the ELO .pk into $(pwd)"; exit 1; }
+  # NO_LICENSE=1: only the compose configuration is needed (image cache before the license is uploaded)
+  if [ -z "${NO_LICENSE:-}" ]; then
+    [ -n "$LIC" ] && [ -f "$LIC" ] || { echo "ERROR: no license: put elo-license.lic or the ELO .pk into $(pwd)"; exit 1; }
+  fi
   if [ ! -f "$ENVF" ] || [ "${1:-}" = --force ]; then
     local svc=${AUTH_SERVICE_PASSWORD:-$(rnd)} repo=${REPO:-repository}
     command -v htpasswd >/dev/null || apt-get install -y -qq apache2-utils >/dev/null
@@ -83,8 +86,7 @@ EOF
   # The env file may have been edited on Windows: keep it LF-only so sed/compose read clean values.
   sed -i 's/\r//g' "$ENVF"
   # The license goes in verbatim (multi-line); docker compose reads it from the environment.
-  export ELO_LIC; ELO_LIC=$(tr -d '\r' < "$LIC")
-  echo "license: $LIC"
+  if [ -n "$LIC" ] && [ -f "$LIC" ]; then export ELO_LIC; ELO_LIC=$(tr -d '\r' < "$LIC"); echo "license: $LIC"; else export ELO_LIC=none; fi
 }
 
 # Cache sources (CACHE_SOURCES, ";"-separated): ftp:// http(s):// URLs (curl), unc:\\server\share\dir (mounted with
@@ -146,7 +148,7 @@ case "$cmd" in
              if [ -n "$where" ]; then echo "found   $img  @ $where"; else echo "missing $img"; fi
            done ;;
   # Save the stack's images (current .env versions) into the local cache backup/ (offline install / own repository).
-  cache)   make_env >/dev/null; mkdir -p backup
+  cache)   NO_LICENSE=1 make_env >/dev/null || { echo "ERROR: could not prepare the configuration"; exit 1; }; mkdir -p backup
            imgs=$(docker compose --profile as --profile flows --profile pgadmin config --images | sort -u); n=$(echo "$imgs" | wc -l); k=0
            for img in $imgs; do
              echo "__PROGRESS__ $k/$n $img"; k=$((k+1))

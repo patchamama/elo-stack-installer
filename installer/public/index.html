@@ -92,6 +92,12 @@ pre.log { background:var(--log); color:var(--logtext); font:12px/1.45 var(--mono
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+// A button that starts a process (start, resume, stop, restart…) gets a pin so it is clear it was triggered.
+document.addEventListener('click', ev => {
+  const b = ev.target.closest?.('button'); if (!b || b.dataset.pinned) return;
+  if (!/(instAction|svc|engine|wslAction|stkSwitch|optional|instUse|stkRecover)\(/.test(b.getAttribute('onclick') || '')) return;
+  setTimeout(() => { b.dataset.pinned = '1'; b.textContent = '📌 ' + b.textContent.trim(); b.disabled = true; b.title = ''; }, 0);
+}, true);
 const api = async (u, body) => (await fetch('/api' + u, body === undefined ? {} : { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })).json().catch(e => ({ ok:false, error:e.message }));
 const gb = b => b == null || isNaN(b) ? '' : (b / 1e9).toFixed(2) + ' GB';
 const rnd = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'[b % 56]).join('');
@@ -608,6 +614,7 @@ async function renderAdmin(reload) {
   <div class="card" id="adm-wsl" hidden></div>
   <div class="grid2">
     <div class="card"><b>${t('m.memory')}</b><div class="progress" style="margin:8px 0"><div style="width:${usedPct}%"></div></div>
+      ${W.isWindows ? `<div style="margin-top:8px"><button class="btn small danger" onclick="memWslOff()">${t('wsl.shutdown')}</button> <span id="mem-wsl-msg" class="muted"></span></div>` : ''}
       <span class="muted">${t('m.usedOf', { used: gb(m.total - m.avail), total: gb(m.total), elo: (totalMem / 1024).toFixed(2) })}</span></div>
     <div class="card"><div class="row"><b>${t('m.engine')}</b><span class="dot ${dockerOn ? 'ok' : 'bad'}"></span><span class="muted">Docker: ${esc(st.docker)}</span>
       <span class="muted">· ${t('m.stackState', { state: running ? `${running}/${st.containers.filter(c => !/^ix-(setup|import)$/.test(c.service)).length} ${t('d.running')}` : t('d.stopped') })}</span></div>
@@ -630,7 +637,8 @@ async function renderAdmin(reload) {
     <button class="btn small primary right" onclick="ixTest($('adm-ix'))">${t('x.run')}</button></div></div>
   ${st.javaClient ? `<div class="card"><b>${t('m.java')}</b><p class="muted" style="margin:4px 0">${esc(st.javaClient.note)}</p>
     <div class="row"><code>${esc(st.javaClient.ixUrl)}</code><button class="btn small" onclick="navigator.clipboard.writeText('${esc(st.javaClient.ixUrl)}')">${t('m.copyIx')}</button>
-    <span class="muted">${t('m.user')}: ${esc(st.javaClient.user)}</span></div></div>` : ''}
+    <span class="muted">${t('m.user')}: ${esc(st.javaClient.user)}</span>
+      <button class="btn small primary" title="dms://&lt;guid&gt;" onclick="openJavaClient()">${t('jc.open')}</button></div><p class="muted" style="margin:4px 0 0">${t('jc.note')}</p></div>` : ''}
   <div class="grid2">
     <div class="card"><b>${t('m.optional')}</b><p class="muted" style="margin:4px 0">${t('m.optionalNote')}</p>
       ${[['as', 'Automation Services'], ['flows', 'ELO Flows (+ worker)'], ['pgadmin', 'pgAdmin (5050)']].map(([id, label]) => { const on = profiles.includes(id);
@@ -787,7 +795,7 @@ async function elCheck(id, keepOut) {
     return;
   }
   const found = r.items.filter(i => i.found);
-  $('el-list').innerHTML = reqHtml + `<table>${r.items.map(i => `<tr><td>${i.found ? '<span class="tok">✓</span>' : '<span class="muted">–</span>'}</td><td>${esc(i.name)}</td><td class="muted">${esc(i.detail)}</td></tr>`).join('')}</table>
+  $('el-list').innerHTML = reqHtml + `<table>${r.items.map(i => `<tr><td>${i.found ? '<span class="tok">✓</span>' : '<span class="muted">–</span>'}</td><td>${esc(i.name)}</td><td class="muted">${esc(i.detail)}</td><td>${/^https?:\/\//i.test(i.detail || '') ? `<a class="btn small" target="_blank" rel="noopener" href="${esc(i.detail)}" title="${esc(t('el.openTab'))}">↗</a>` : ''}</td></tr>`).join('')}</table>
     <div class="muted" style="margin-top:4px">${t('el.browsers')}: ${r.scan.browsers.length ? esc(r.scan.browsers.join(', ')) : t('el.none')}</div>
     ${r.os === 'linux' && !r.scan.desktopInstalled ? `<div class="tbad" style="margin-top:4px">${t('el.noDesktop')}</div>` : ''}`;
   if (!found.length) st.textContent = '· ' + t('el.noElo');
@@ -914,6 +922,15 @@ async function wslMem() {
   $('wsl-confirm').innerHTML = `<span class="tok">✓ ${t(r.restarted ? 'wsl.memApplied' : 'wsl.memSaved', { gb: r.limitGB })}</span>`;
   if (r.restarted) renderInstallations(true);
 }
+// dms:// is the protocol of the local ELO Java Client; any GUID makes it start.
+function openJavaClient() { const g = (crypto.randomUUID ? crypto.randomUUID() : '00000000-0000-4000-8000-000000000000').toUpperCase(); window.location.href = 'dms://' + g; }
+async function memWslOff() {
+  if (!confirm(t('wsl.confirm'))) return;
+  const m = $('mem-wsl-msg'); m.textContent = t('m.working');
+  const r = await api('/wsl', { action: 'shutdown' });
+  if (!r.ok) { m.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
+  CACHE.status = null; renderAdmin(true);
+}
 async function wslAction(action, sure) {
   if (action === 'shutdown' && !sure) {
     $('wsl-confirm').innerHTML = `<div class="row" style="margin-top:8px"><span class="twarn">${t('wsl.confirm')}</span>
@@ -952,7 +969,7 @@ async function stkAddons() {
   const r = await api('/stack/addons?instance=' + encodeURIComponent(sel.value));
   if (!r.ok) { el.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
   const ixl = r.ix ? `<div><b>IX</b> ${esc(r.ix.version)} <span class="muted">· ${esc(r.ix.instance || '')} · ${esc(r.ix.database || '')} · ${esc(r.ix.license || '')}</span></div>` : '';
-  el.innerHTML = ixl + `<b>${t('adn.title')}</b> ` + r.addons.map(a => `<span class="row" style="gap:5px;margin:2px 12px 2px 0;display:inline-flex" title="${esc(a.evidence.join('\n'))}"><span class="dot ${a.found ? 'ok' : 'idle'}"></span>${esc(a.name)}</span>`).join('') + ` <span class="muted">(${t('adn.heuristic')})</span>`;
+  el.innerHTML = ixl + `<b>${t('adn.title')}</b> ` + r.addons.map(a => `<span class="row" style="gap:5px;margin:2px 12px 2px 0;display:inline-flex" title="${esc(a.evidence.join('\n'))}"><span class="dot ${a.found ? 'ok' : 'idle'}"></span>${esc(a.name)}${a.versions?.length ? ` <span class="muted">${esc(a.versions.join(', '))}</span>` : ''}</span>`).join('') + ` <span class="muted">(${t(r.packagesApi ? 'adn.packages' : 'adn.heuristic')})</span>`;
 }
 async function stkSwitch() {
   const name = $('stk-sel').value;
