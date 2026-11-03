@@ -38,20 +38,23 @@ h2 { margin:0 0 4px; font-size:20px; } .lead { color:var(--muted); margin:0 0 18
 .explain { background:var(--sur2); border-left:3px solid var(--accent2); padding:10px 14px; border-radius:6px; margin:0 0 16px; color:var(--muted); font-size:13px; }
 .banner { border:1px solid var(--green); background:color-mix(in srgb, var(--green) 10%, var(--sur)); border-radius:10px; padding:14px 16px; margin-bottom:14px; }
 .card { background:var(--sur); border:1px solid var(--border); border-radius:10px; padding:16px; margin-bottom:14px; }
-.grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px; }
+.grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px 14px; }
+.grid2 > div { display:flex; flex-direction:column; justify-content:flex-end; min-width:0; } .grid2 > div > label { line-height:1.3; }
+.grid2 input[type=text], .grid2 input[type=number], .grid2 input[type=password], .grid2 select { width:100%; box-sizing:border-box; }
+.pbar { height:14px; background:var(--sur2); border:1px solid var(--border); border-radius:7px; overflow:hidden; margin:8px 0 2px; } .pbar > div { height:100%; width:0; background:linear-gradient(90deg,var(--green),var(--accent2)); transition:width .4s; }
 label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
 input[type=text], input[type=password], input[type=number], select, textarea { width:100%; padding:8px 10px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; font-size:13px; }
 button.btn, a.btn { display:inline-block; padding:8px 16px; border-radius:6px; border:1px solid var(--border); background:var(--sur2); color:var(--text); cursor:pointer; font-size:13px; text-decoration:none; }
 .primary { background:var(--accent) !important; border-color:var(--accent) !important; color:#fff !important; } .small { padding:3px 9px !important; font-size:12px !important; }
 button:disabled { opacity:.5; cursor:default; }
 .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; } .right { margin-left:auto; }
-.check { display:grid; grid-template-columns:22px 1fr auto; gap:10px; padding:8px 0; border-bottom:1px solid var(--border); align-items:center; }
-.check:last-child { border-bottom:0; } .check .v { color:var(--muted); font-size:12px; text-align:right; }
+.check { display:grid; grid-template-columns:22px auto minmax(0,1fr); gap:10px; padding:8px 0; border-bottom:1px solid var(--border); align-items:center; }
+.check:last-child { border-bottom:0; } .check .v { color:var(--muted); font-size:12px; text-align:left; white-space:pre; overflow-x:auto; min-width:0; padding-bottom:2px; }
 .dot { width:12px; height:12px; border-radius:50%; display:inline-block; flex:none; } .ok { background:var(--green); } .warn { background:var(--amber); } .bad { background:var(--red); } .idle { background:var(--border); }
 .tok { color:var(--green); } .twarn { color:var(--amber); } .tbad { color:var(--red); } .muted { color:var(--muted); font-size:12px; }
 table { width:100%; border-collapse:collapse; font-size:13px; } th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--border); vertical-align:top; }
 th { color:var(--muted); font-weight:600; font-size:12px; } .tablewrap { overflow-x:auto; }
-pre.log { background:var(--log); color:var(--logtext); font:12px/1.45 var(--mono); padding:12px; border-radius:8px; max-height:320px; overflow:auto; white-space:pre-wrap; margin:0; }
+pre.log { background:var(--log); color:var(--logtext); font:12px/1.45 var(--mono); padding:12px; border-radius:8px; max-height:320px; overflow:auto; white-space:pre; margin:0; }
 .progress { height:8px; background:var(--sur2); border-radius:4px; overflow:hidden; } .progress > div { height:100%; background:var(--accent); width:0; transition:width .4s; }
 .steplist div { padding:3px 0; } .steplist div::before { content:'○ '; color:var(--muted); } .steplist div.done::before { content:'● '; color:var(--green); } .steplist div.cur::before { content:'◐ '; color:var(--accent); }
 .bar { height:6px; background:var(--sur2); border-radius:3px; overflow:hidden; min-width:80px; } .bar > div { height:100%; background:var(--accent2); }
@@ -96,7 +99,7 @@ const store = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 
 // ── State ────────────────────────────────────────────────────────────────────
 const W = { step: 0, done: new Set(), checks: null, inv: null, license: null, prov: null,
-  cfg: { ELO_TAG: 'v25-0.30.1', ELO_SEARCH_TAG: 'v25-0.7', REPO: 'repository', ELO_DISPLAY_NAME: '', REPO_LANGUAGE: 'en', ELO_LICENSE_TYPE: '1',
+  cfg: { ELO_TAG: 'v25-0.30.1', ELO_SEARCH_TAG: 'v25-0.7', REPO: 'repository', ELO_DISPLAY_NAME: '', REPO_LANGUAGE: 'de', ELO_LICENSE_TYPE: '1',
     AUTH_ADMIN_USERNAME: 'Administrator', AUTH_ADMIN_PASSWORD: rnd(), AUTH_SERVICE_USERNAME: 'ELO Service', AUTH_SERVICE_PASSWORD: rnd(),
     DATABASE_USERNAME: 'elodb', DATABASE_PASSWORD: rnd(), IX_URL_PUBLIC: '', as: true, flows: true, pgadmin: true, fresh: true, eula: true,
     instance: '', wslMemGB: null, wslRestart: true, PORT_SERVER: 9090, PORT_AS: 9060, PORT_FLOWS: 9010, PORT_SEARCH: 9200, PORT_SEARCH_T: 9204, PORT_PGADMIN: 5050 },
@@ -168,15 +171,18 @@ function stream(id, onLine, onDone) {
   es.onmessage = ev => { const line = JSON.parse(ev.data); onLine(line); if (line.startsWith('__EXIT__:')) { es.close(); onDone?.(line.endsWith(':0')); } };
   es.onerror = () => es.close();
 }
-async function runJob(endpoint, body, el, onDone) {
-  el.innerHTML = '<div class="steplist"></div><pre class="log" style="margin-top:8px"></pre>';
-  const list = el.querySelector('.steplist'), log = el.querySelector('pre'), steps = [];
+async function runJob(endpoint, body, el, onDone, onLine) {
+  el.innerHTML = '<div class="steplist"></div><div class="pbar" hidden><div></div></div><div class="muted pl" hidden></div><pre class="log" style="margin-top:8px"></pre>';
+  const list = el.querySelector('.steplist'), log = el.querySelector('pre'), steps = [], pb = el.querySelector('.pbar'), pl = el.querySelector('.pl');
   const j = await api(endpoint, body);
   if (!j.id) { log.textContent = j.error || 'error'; return; }
   stream(j.id, line => {
     if (line.startsWith('__STEP__ ')) { steps.push(line.slice(9)); list.innerHTML = steps.map((s, i) => `<div class="${i < steps.length - 1 ? 'done' : 'cur'}">${esc(s)}</div>`).join(''); return; }
+    const pm = /^__PROGRESS__ (\d+)\/(\d+) ?(.*)$/.exec(line);
+    if (pm) { const pct = Math.round(+pm[1] / +pm[2] * 100); pb.hidden = pl.hidden = false; pb.firstElementChild.style.width = pct + '%'; pl.textContent = `${pm[1]}/${pm[2]} · ${pct}% · ${pm[3]}`; return; }
+    onLine?.(line);
     if (line.startsWith('__REBOOT__ ')) { list.insertAdjacentHTML('beforeend', `<p class="twarn"><b>${t('job.reboot')}:</b> ${esc(line.slice(11))}</p>`); return; }
-    if (line.startsWith('__EXIT__:')) { list.querySelectorAll('div').forEach(d => d.className = 'done'); return; }
+    if (line.startsWith('__EXIT__:')) { list.querySelectorAll('div').forEach(d => d.className = 'done'); if (!pb.hidden) pb.firstElementChild.style.width = '100%'; return; }
     log.textContent += line + '\n'; log.scrollTop = 1e9;
   }, ok => onDone?.(ok));
 }
@@ -327,13 +333,28 @@ function registry() {
     <div id="cli-help2" hidden style="margin-top:8px"><b>${t('cli.title')}</b>${t('cli.steps')}
         <p style="margin-top:8px"><b>${t('cli.pdf')}</b> <a href="/help/docs/en-us_consultingops-opsletter_ubuntu.pdf" target="_blank" rel="noopener">📄 English (PDF)</a> ·
           <a href="/help/docs/de-de_consultingops-opsletter_ubuntu.pdf" target="_blank" rel="noopener">📄 Deutsch (PDF)</a></p></div></div>
+  <div class="card" id="local-card"><b>${t('g.localTitle')}</b> <span class="muted">${t('a.loading')}</span></div>
+  <p class="muted" style="margin:0 0 8px">${t('g.or')}</p>
   <div class="card grid2">
     <div><label>${t('g.user')}</label><input type="text" id="r-user" autocomplete="username"></div>
     <div><label>${t('g.secret')}</label><input type="password" id="r-secret" autocomplete="off"></div>
     <div><label>${t('g.pass')}</label><input type="password" id="r-pass" autocomplete="current-password"></div>
     <div style="align-self:end"><button class="btn primary" onclick="regLogin()">${t('g.signin')}</button> <span id="r-msg"></span></div>
   </div>
-  <div class="card row"><span class="muted">${t('g.localNote')}</span><button class="btn small right" onclick="useLocal()">${t('g.local')}</button></div>` + nav(!!W.inv || W.checks?.loggedIn);
+  ` + nav(!!W.inv || W.checks?.loggedIn);
+  localCard();
+}
+// Local images (Docker + local cache) are read as soon as the page opens; choosing them skips the registry.
+async function localCard() {
+  const el = $('local-card'); if (!el) return;
+  const inv = W.localInv = await api('/local-inventory');
+  const tags = inv.ok ? (inv.repos.find(r => r.name === 'server')?.tags || []).filter(x => /^v\d+-\d/.test(x.tag)).sort((a, b) => compareTags(a.tag, b.tag)) : [];
+  if (!tags.length) { el.innerHTML = `<b>${t('g.localTitle')}</b> <span class="muted">${esc(inv.error || t('g.noLocal'))}</span>`; return; }
+  const sel = W.inv?.source === 'local';
+  el.innerHTML = `<div class="row"><b>${t('g.localTitle')}</b><span class="muted">${t('g.localFound', { n: tags.length })}</span>
+    ${sel ? `<span class="tok right">✔ ${t('g.localSelected')}</span>` : ''}<button class="btn ${sel ? '' : 'primary'} small ${sel ? '' : 'right'}" onclick="useLocal()">${t('g.local')}</button></div>
+    <div style="margin-top:6px">${tags.map(x => `<span class="row" style="gap:6px;margin:3px 14px 3px 0;display:inline-flex"><span class="dot ok"></span><b>${esc(x.tag)}</b> <span class="muted">${x.local ? t('i.inDocker') : t('i.cachedShort')}</span></span>`).join('')}</div>
+    <div class="muted" style="margin-top:6px">${t('g.localNote')}</div>`;
 }
 async function useLocal() {
   const inv = await api('/local-inventory');
@@ -390,13 +411,23 @@ function availability() {
   const svcs = ['server', 'ix-setup', 'ix-import', 'tr2', ...(W.cfg.as ? ['as'] : []), ...(W.cfg.flows ? ['flows', 'flows-worker'] : [])];
   const find = (n, tg) => (W.inv.repos.find(r => r.name === n)?.tags || []).find(x => x.tag === tg) || {};
   const rows = [...svcs.map(n => [n, W.cfg.ELO_TAG]), ['search', W.cfg.ELO_SEARCH_TAG]].map(([n, tg]) => {
-    const x = find(n, tg), cls = x.local ? 'ok' : x.cached ? '' : 'idle', st = x.local ? t('i.inDocker') : x.cached ? t('i.inCache') : t('i.download');
-    return `<span class="row" style="gap:6px;margin:3px 14px 3px 0;display:inline-flex"><span class="dot ${cls}" style="${x.cached && !x.local ? 'background:var(--accent2)' : ''}"></span><b>${n}</b>:${esc(tg)} <span class="muted">${st}</span></span>`;
+    const x = find(n, tg), cls = x.local || x.cached ? 'ok' : 'idle', st = x.local ? t('i.inDocker') + (x.cached ? ' · ' + t('i.cachedShort') : '') : x.cached ? t('i.cachedShort') : t('i.download');
+    return `<span class="row" style="gap:6px;margin:3px 14px 3px 0;display:inline-flex"><span class="dot ${cls}"></span><b>${n}</b>:${esc(tg)} <span class="muted">${st}</span></span>`;
   });
   el.innerHTML = rows.join('');
 }
-function saveCache() { runJob('/cache/save', { ELO_TAG: W.cfg.ELO_TAG, ELO_SEARCH_TAG: W.cfg.ELO_SEARCH_TAG }, $('cache-job'), async () => {
-  const inv = W.inv.source === 'local' ? await api('/local-inventory') : null; if (inv?.ok) W.inv = inv; CACHE.containers = null; }); }
+// Mark an image as cached in the inventory (also live, while the job saves it).
+function markCached(ref) {
+  const m = /^registry\.elo\.com\/eck-services\/([^:]+):(.+)$/.exec(ref); if (!m) return;
+  const e = (W.inv.repos.find(r => r.name === m[1])?.tags || []).find(x => x.tag === m[2]); if (e) e.cached = true;
+}
+function saveCache() {
+  runJob('/cache/save', { ELO_TAG: W.cfg.ELO_TAG, ELO_SEARCH_TAG: W.cfg.ELO_SEARCH_TAG }, $('cache-job'), async () => {
+    const inv = await api('/local-inventory');
+    if (inv?.ok) { if (W.inv.source === 'local') W.inv = inv; else for (const r of inv.repos) for (const tg of r.tags) { const e = (W.inv.repos.find(x => x.name === r.name)?.tags || []).find(x => x.tag === tg.tag); if (e) { if (tg.cached) e.cached = true; if (tg.local) e.local = true; } } }
+    CACHE.containers = null; availability();
+  }, line => { const m = /^(?:saved|cached)\s+(\S+)/.exec(line); if (m) { markCached(m[1]); availability(); } });
+}
 
 // ── 5 License ────────────────────────────────────────────────────────────────
 function license() {
@@ -572,6 +603,7 @@ async function renderAdmin(reload) {
     <p class="lead">${t('m.lead')}</p>
   <div class="card" id="adm-mem"><b>${t('hm.title')}</b> <span class="muted">${t('a.loading')}</span></div>
   <div class="card" id="adm-stack"><b>${t('stk.title')}</b> <span class="muted">${t('a.loading')}</span></div>
+  <div class="card" id="adm-cache"><b>${t('cch.title')}</b> <span class="muted">${t('a.loading')}</span></div>
   <div class="card" id="adm-inst"><b>${t('inst.title')}</b> <span class="muted">${t('a.loading')}</span></div>
   <div class="card" id="adm-wsl" hidden></div>
   <div class="grid2">
@@ -617,6 +649,7 @@ async function renderAdmin(reload) {
   </div>`;
   renderInstallations(reload);
   renderStack();
+  renderCacheCard();
 }
 // Memory of this computer: stacked bar by consumer (WSL, Hyper-V VMs, VirtualBox, Docker Desktop), system, free + legend.
 async function renderHostMem(reload) {
@@ -902,15 +935,24 @@ async function renderStack() {
   if (!r.ok) { el.innerHTML = `<b>${t('stk.title')}</b> <span class="tbad">${esc(r.error)}</span>`; return; }
   STK.scope = r.scope || 'local';
   el.innerHTML = `<div class="row"><b>${t('stk.title')}</b>
-      <select id="stk-sel">${r.instances.map(i => `<option value="${esc(i.name)}" ${i.name === r.current ? 'selected' : ''}>${esc(i.name)} · ELO ${esc(i.tag || '?')} · ${i.running}/${i.total}${i.noenv ? ' · ' + t('stk.noenv') : ''}${i.name === r.current ? ' ★' : ''}</option>`).join('')}</select>
+      <select id="stk-sel" onchange="stkAddons()">${r.instances.map(i => `<option value="${esc(i.name)}" ${i.name === r.current ? 'selected' : ''}>${esc(i.name)} · ELO ${esc(i.tag || '?')} · ${i.running}/${i.total}${i.noenv ? ' · ' + t('stk.noenv') : ''}${i.name === r.current ? ' ★' : ''}</option>`).join('')}</select>
       <button class="btn small primary" onclick="stkSwitch()">${t('stk.activate')}</button>
       <button class="btn small" onclick="stkRecover()" title="${esc(t('stk.recoverHint'))}">${t('stk.recover')}</button>
       <button class="btn small danger" onclick="stkDelete()">${t('stk.delete')}</button></div>
-    <div id="stk-msg" class="muted" style="margin-top:8px">${STK.last || t('stk.note')}</div>`;
+    <div id="stk-msg" class="muted" style="margin-top:8px">${STK.last || t('stk.note')}</div><div id="stk-addons" class="muted" style="margin-top:8px"></div>`;
+  stkAddons();
   const s = await api('/stack/switch');   // a switch started before a page reload keeps counting
   if (s.ok && s.switch && ['stopping', 'starting', 'waiting'].includes(s.switch.phase) && !STK.tick) stkWatch(s.switch.startedAt, s.switch.to);
 }
 const stkMsg = h => { STK.last = h; const m = $('stk-msg'); if (m) m.innerHTML = h; };
+// docXtractor and ELO Business Solutions found in the selected stack (heuristic: image names and plugin/data files).
+async function stkAddons() {
+  const el = $('stk-addons'), sel = $('stk-sel'); if (!el || !sel) return;
+  el.textContent = t('adn.checking');
+  const r = await api('/stack/addons?instance=' + encodeURIComponent(sel.value));
+  if (!r.ok) { el.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
+  el.innerHTML = `<b>${t('adn.title')}</b> ` + r.addons.map(a => `<span class="row" style="gap:5px;margin:2px 12px 2px 0;display:inline-flex" title="${esc(a.evidence.join('\n'))}"><span class="dot ${a.found ? 'ok' : 'idle'}"></span>${esc(a.name)}</span>`).join('') + ` <span class="muted">(${t('adn.heuristic')})</span>`;
+}
 async function stkSwitch() {
   const name = $('stk-sel').value;
   const r = await api('/stack/switch', { name });
@@ -960,6 +1002,29 @@ async function stkRecover() {
     <span class="dot ${h.active ? 'ok' : 'bad'}"></span> ${t(h.active ? 'stk.running' : 'stk.notRunning')} (IX ${h.ix ? '✔' : '✘'} · AS ${h.as ? '✔' : '✘'} · Flows ${h.flows ? '✔' : '✘'})
     <br><span class="dot ${login ? 'ok' : 'bad'}"></span> ${t(login ? 'stk.loginOk' : 'stk.loginFail')}${!login && ix.steps?.[1] ? ` <span class="muted">${esc(ix.steps[1].summary)}</span>` : ''}`);
   renderAdmin(true);
+}
+// Local image cache (backup/*.tar): list, delete, open the folder.
+async function renderCacheCard() {
+  const el = $('adm-cache'); if (!el) return;
+  const i = await api('/images');
+  if (!i.ok) { el.innerHTML = `<b>${t('cch.title')}</b> <span class="tbad">${esc(i.error)}</span>`; return; }
+  const total = i.backups.reduce((a, b) => a + (b.size || 0), 0);
+  el.innerHTML = `<div class="row"><b>${t('cch.title')}</b><span class="muted">${i.backups.length} · ${gb(total)}</span>
+      <button class="btn small right" onclick="admOpenCache()">📂 ${t('k.openCache')}</button>
+      ${i.backups.length ? `<button class="btn small danger" onclick="cacheDelete(${esc(JSON.stringify(i.backups.map(b => b.file)))})">${t('cch.deleteAll')}</button>` : ''}</div>
+    <span id="adm-cache-msg" class="muted"></span>
+    ${i.backups.length ? `<div class="tablewrap"><table><tr><th>${t('k.image')}</th><th>${t('k.size')}</th><th>${t('m.created')}</th><th></th></tr>
+    ${i.backups.map(b => `<tr><td><span class="dot ok"></span> ${esc(b.ref)}</td><td>${gb(b.size)}</td><td>${esc(b.date)}</td>
+      <td class="row"><button class="btn small" onclick="loadTar('${esc(b.file)}')">${t('k.load')}</button>
+      <button class="btn small danger" onclick="cacheDelete(['${esc(b.file)}'])">${t('m.delete')}</button></td></tr>`).join('')}</table></div>` : `<p class="muted">${t('m.none')}</p>`}
+    <div id="k-job"></div>`;
+}
+async function admOpenCache() { const m = $('adm-cache-msg'); m.textContent = t('m.opening'); const r = await api('/open', { what: 'cache' }); m.textContent = r.ok ? (r.path || r.linuxPath) + (r.note ? ' — ' + r.note : '') : r.error; }
+async function cacheDelete(files) {
+  if (!confirm(t('cch.confirm', { n: files.length }))) return;
+  const r = await api('/cache/delete', { files });
+  if (!r.ok) alert(r.error);
+  CACHE.containers = null; renderCacheCard();
 }
 async function svc(action, s) { admOut(t('m.working')); const r = await api('/service', { action, services: [s] }); if (!r.ok) admOut(r.error); renderAdmin(true); }
 async function engine(action) { admOut(t('m.working')); const r = await api('/engine', { action }); admOut(r.ok ? r.out : r.error); setTimeout(() => renderAdmin(true), 1000); }
@@ -1011,7 +1076,7 @@ async function renderContainers(reload) {
     <b class="muted">${t('k.eloCache')}</b>
     ${i.ok && i.backups.length ? `<div class="tablewrap"><table><tr><th>${t('k.image')}</th><th>${t('k.size')}</th><th>${t('m.created')}</th><th></th></tr>
       ${i.backups.map(b => `<tr><td><span class="dot" style="background:var(--accent2)"></span> ${esc(b.ref)}</td><td>${gb(b.size)}</td><td>${esc(b.date)}</td>
-        <td><button class="btn small" onclick="loadTar('${esc(b.file)}')">${t('k.load')}</button></td></tr>`).join('')}</table></div>` : `<p class="muted">${t('m.none')}</p>`}
+        <td class="row"><button class="btn small" onclick="loadTar('${esc(b.file)}')">${t('k.load')}</button><button class="btn small danger" onclick="cacheDelete(['${esc(b.file)}']).then(() => renderContainers(true))">${t('m.delete')}</button></td></tr>`).join('')}</table></div>` : `<p class="muted">${t('m.none')}</p>`}
     <b class="muted">${t('k.vmImages')}</b>
     ${i.vmImages?.length ? `<table>${i.vmImages.map(v => `<tr><td>${esc(v.file)}</td><td>${gb(v.size)}</td><td>${esc(v.date)}</td>
       <td>${/\.iso$/i.test(v.file) ? `<a class="btn small" href="/isos/${encodeURIComponent(v.file)}" download>${t('iso.save')}</a>` : ''}</td></tr>`).join('')}</table>` : `<p class="muted">${t('m.none')}</p>`}

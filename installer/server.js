@@ -383,7 +383,10 @@ for i in $(seq 1 80); do
   echo "__CHECK__ {\\"ix\\":\\"$ix\\",\\"web\\":\\"$web\\",\\"setup\\":\\"$setup\\",\\"t\\":$((i*15))}"
   case "$setup" in exited/0) [ "$ix" = 200 ] && break ;; exited/*) echo "ix-setup failed:"; docker logs --tail 30 $ELO_INSTANCE-ix-setup; exit 1 ;; esac
 done
-search=$(curl -sk --max-time 8 -u "$AUTH_SERVICE_USERNAME:$AUTH_SERVICE_PASSWORD" https://localhost:\${PORT_SEARCH:-9200}/_cluster/health | sed -n 's/.*"status":"\\([a-z]*\\)".*/\\1/p') || true
+for i in $(seq 1 30); do
+  search=$(curl -sk --max-time 8 -u "$AUTH_SERVICE_USERNAME:$AUTH_SERVICE_PASSWORD" https://localhost:\${PORT_SEARCH:-9200}/_cluster/health | sed -n 's/.*"status":"\\([a-z]*\\)".*/\\1/p') || true
+  [ -n "$search" ] && break; sleep 10
+done
 echo "__CHECK__ {\\"search\\":\\"\${search:-down}\\"}"
 }
 set +e; (main) 2>&1 | tee -a "$LAST"; rc=\${PIPESTATUS[0]}
@@ -651,6 +654,30 @@ echo "__TAR__"; ls -l --time-style=+%F ${x.shq(x.eloDir() + '/backup')}/*.tar 2>
   let vmImages = [];
   try { const d = path.join(require('./provision').VM_DIR, 'cache'); vmImages = fs.readdirSync(d).map(f => ({ file: f, size: fs.statSync(path.join(d, f)).size, date: fs.statSync(path.join(d, f)).mtime.toISOString().slice(0, 10) })); } catch {}
   return { ok: true, images, backups, vmImages };
+}));
+// Delete image archives (.tar) of the local cache (backup/).
+app.post('/api/cache/delete', wrap(async req => {
+  const files = (req.body?.files || []).map(f => path.posix.basename(String(f))).filter(f => /^[\w.~@+-]+\.tar$/.test(f));
+  if (!files.length) throw new Error('no files');
+  await x.detect();
+  const out = await x.sh(`cd ${x.shq(x.eloDir() + '/backup')} && for f in ${files.map(x.shq).join(' ')}; do rm -f -- "$f" && echo "deleted $f"; done`, 120);
+  return { ok: true, out: out.trim() };
+}));
+
+// Add-ons found in a stack: docXtractor and the ELO Business Solutions (Invoice, Contract, Common, Contact, DATEV,
+// Development). Heuristic: names of the stack's images/containers and of the files in its plugin/data volumes.
+const ADDONS = { docXtractor: /docx?tractor/i, 'BS Invoice': /invoice|rechnung/i, 'BS Contract': /contract|vertrag/i, 'BS Common': /bs[-_.]?common|business[-_.]?solutions?[-_.]?common/i,
+  'BS Contact': /bs[-_.]?contact|business[-_.]?solutions?[-_.]?contact/i, 'BS DATEV': /datev/i, 'BS Development': /bs[-_.]?development|business[-_.]?solutions?[-_.]?dev/i };
+app.get('/api/stack/addons', wrap(async req => {
+  const inst = instOf(req.query.instance);
+  await x.detect();
+  const out = await x.sh(`V=/var/lib/docker/volumes
+echo "__IMG__"; docker ps -a --filter "label=com.docker.compose.project=${inst}" --format '{{.Image}} {{.Names}}' 2>/dev/null
+echo "__FILES__"; for v in plugins data-ix data-eloam repository-basis; do find "$V/${inst}_$v/_data" -maxdepth 6 \( -iname '*docxtractor*' -o -iname '*docxtract*' -o -iname '*invoice*' -o -iname '*contract*' -o -iname '*datev*' -o -iname '*bs-common*' -o -iname '*bs_common*' -o -iname '*bs-contact*' -o -iname '*bs_contact*' -o -iname '*bs-development*' -o -iname '*bs_development*' -o -iname '*business*solution*' \) 2>/dev/null | head -40; done`, 120);
+  const evid = {};
+  for (const l of out.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('__')))
+    for (const [k, re] of Object.entries(ADDONS)) if (re.test(l)) (evid[k] ||= []).push(l.replace(/^.*_data\//, ''));
+  return { ok: true, instance: inst, heuristic: true, addons: Object.keys(ADDONS).map(k => ({ name: k, found: !!evid[k], evidence: (evid[k] || []).slice(0, 5) })) };
 }));
 app.post('/api/images/remove', wrap(async req => {
   const refs = (req.body?.refs || []).filter(r => /^[\w./:-]+$/.test(r));

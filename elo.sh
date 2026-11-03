@@ -147,7 +147,9 @@ case "$cmd" in
            done ;;
   # Save the stack's images (current .env versions) into the local cache backup/ (offline install / own repository).
   cache)   make_env >/dev/null; mkdir -p backup
-           for img in $(docker compose --profile as --profile flows --profile pgadmin config --images | sort -u); do
+           imgs=$(docker compose --profile as --profile flows --profile pgadmin config --images | sort -u); n=$(echo "$imgs" | wc -l); k=0
+           for img in $imgs; do
+             echo "__PROGRESS__ $k/$n $img"; k=$((k+1))
              tar="backup/$(echo "$img" | tr '/:' '~@').tar"
              [ -f "$tar" ] && { echo "cached  $img"; continue; }
              docker image inspect "$img" >/dev/null 2>&1 || docker pull -q "$img" >/dev/null || { echo "ERROR pulling $img"; exit 1; }

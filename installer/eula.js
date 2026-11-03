@@ -7,6 +7,22 @@ let chromium;
 try { ({ chromium } = require('playwright')); }
 catch { ({ chromium } = require(require('path').join(__dirname, '..', '..', '..', 'node_modules', 'playwright'))); }
 
+// Headless browser: the bundled Chromium; if it was never downloaded, the Edge/Chrome already on the computer;
+// as a last resort download Chromium once (npx playwright install chromium) and retry.
+let installing = null;
+async function launchBrowser() {
+  try { return await chromium.launch(); } catch (e) {
+    if (!/Executable doesn't exist|playwright install/i.test(e.message)) throw e;
+    for (const channel of ['msedge', 'chrome']) { try { return await chromium.launch({ channel }); } catch {} }
+    installing ||= new Promise((res, rej) => {
+      let cli; try { cli = require.resolve('playwright/cli.js'); } catch { return rej(e); }
+      require('child_process').execFile(process.execPath, [cli, 'install', 'chromium'], { timeout: 600000 }, err => err ? rej(new Error('Could not download Chromium for the browser tests: ' + err.message)) : res());
+    });
+    await installing;
+    return chromium.launch();
+  }
+}
+
 async function signIn(page, url, user, pass) {
   await page.goto(url, { waitUntil: 'networkidle', timeout: 90000 });
   const u = await page.$('input[name=username], input#username');
@@ -23,7 +39,7 @@ async function signIn(page, url, user, pass) {
 }
 
 async function acceptEula({ base, repo, user, pass, screenshot }) {
-  const browser = await chromium.launch();
+  const browser = await launchBrowser();
   try {
     const page = await browser.newPage({ viewport: { width: 1400, height: 850 } });
     await signIn(page, `${base}/${repo}/plugin/de.elo.ix.plugin.proxy/ac/`, user, pass);
@@ -46,7 +62,7 @@ async function acceptEula({ base, repo, user, pass, screenshot }) {
 }
 
 async function webClientCheck({ base, repo, user, pass, screenshot }) {
-  const browser = await chromium.launch();
+  const browser = await launchBrowser();
   try {
     const page = await browser.newPage({ viewport: { width: 1400, height: 850 } });
     await page.goto(`${base}/${repo}/plugin/de.elo.ix.plugin.proxy/web/`, { waitUntil: 'networkidle', timeout: 90000 });
