@@ -84,9 +84,22 @@ async function readEnv(name = curInstance()) {
   let txt = null;
   if (x.getMode() === 'ssh') txt = await x.sh(`cat ${x.REMOTE_DIR}/${envRel(name)} 2>/dev/null`, 30);
   else { try { txt = fs.readFileSync(path.join(ELO, envRel(name)), 'utf8'); } catch {} }
-  if (!txt || !/=/.test(txt)) return null;
+  if (!txt || !/=/.test(txt)) return savedCreds(name);
   return parseEnv(txt);
 }
+// No .env (stack created elsewhere): credentials typed in the Administration, kept outside the repo (RUN_DIR).
+const CREDS_FILE = path.join(x.RUN_DIR, 'elo-installer-creds.json');
+const readCreds = () => { try { return JSON.parse(fs.readFileSync(CREDS_FILE, 'utf8')); } catch { return {}; } };
+const savedCreds = name => { const c = readCreds()[name]; return c?.AUTH_ADMIN_PASSWORD ? c : null; };
+app.post('/api/credentials', wrap(async req => {
+  const { user, password, repo } = req.body || {};
+  if (!password) throw new Error('password required');
+  fs.mkdirSync(x.RUN_DIR, { recursive: true });
+  const all = readCreds();
+  all[curInstance()] = { AUTH_ADMIN_USERNAME: String(user || 'Administrator'), AUTH_ADMIN_PASSWORD: String(password), REPO: String(repo || 'repository') };
+  fs.writeFileSync(CREDS_FILE, JSON.stringify(all, null, 2));
+  return { ok: true };
+}));
 
 // Base URL to reach the published server port from where this backend runs (WSL IP on Windows, target host over SSH).
 async function baseUrl(e) {
@@ -490,7 +503,7 @@ echo "__MEM__"; free -b | awk '/Mem/ {print $2, $3, $7}'; echo "__DOCKER__"; sys
   // Same host, another ELO port (VirtualBox NAT forwards to other host ports: portMap).
   const at = p => base.replace(/:\d+$/, ':' + (tg?.portMap?.[p] || p + (tg?.portOffset || 0)));
   return {
-    ok: true, installed: !!e, instance: inst, docker: sect('DOCKER')[0] || 'inactive', memory: { total, used, avail }, containers,
+    ok: true, installed: !!e, envMissing: !e && containers.length > 0, instance: inst, docker: sect('DOCKER')[0] || 'inactive', memory: { total, used, avail }, containers,
     // ELO 25 serves the web apps through the IX proxy plugin; ELO 23 and older as separate contexts (/web, /ac, /wf).
     urls: e ? {
       ...(/^v2[0-3]-/.test(e.ELO_TAG || '') ? { 'Web Client': `${base}/web/`, 'Admin Console': `${base}/ac/`, 'ELO WF (Web Forms)': `${base}/wf/` } : {

@@ -537,7 +537,15 @@ async function access() {
     <div class="nav"><button class="btn" onclick="go(${W.step - 1})">${t('nav.back')}</button><button class="btn primary" onclick="show('admin')">${t('nav.toAdmin')}</button></div>`;
   $('acc').innerHTML = accessHtml(await loadStatus());
 }
+async function saveCreds() {
+  const r = await api('/credentials', { user: $('cr-user').value.trim(), password: $('cr-pw').value, repo: $('cr-repo').value.trim() });
+  if (!r.ok) { alert(r.error); return; }
+  CACHE.status = null; (W.step === 8 && $("acc") ? access : () => renderAdmin(true))();
+}
 function accessHtml(st) {
+  if (st.envMissing) return `<div class="card"><b>${t('a.creds')}</b><p class="tbad" style="margin:6px 0">${t('a.noenv')}</p>
+    <div class="row"><input id="cr-user" placeholder="${t('m.user')}" value="Administrator"><input id="cr-pw" type="password" placeholder="${t('a.pw')}"><input id="cr-repo" placeholder="repository" value="repository">
+    <button class="btn small primary" onclick="saveCreds()">${t('a.save')}</button></div></div>`;
   return `<div class="card"><b>${t('a.services')}</b><table>${Object.entries(st.urls || {}).map(([k, u]) => `<tr><td>${esc(k)}</td><td><a target="_blank" href="${esc(u)}">${esc(u)}</a></td></tr>`).join('')}</table>
     <p class="muted">${t('a.remote')}</p></div>
   <div class="card"><div class="row"><b>${t('a.creds')}</b><button class="btn small right" onclick="togglePw(this)">${t('a.show')}</button></div>
