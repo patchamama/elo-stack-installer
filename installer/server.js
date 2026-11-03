@@ -677,7 +677,17 @@ echo "__FILES__"; for v in plugins data-ix data-eloam repository-basis; do find 
   const evid = {};
   for (const l of out.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('__')))
     for (const [k, re] of Object.entries(ADDONS)) if (re.test(l)) (evid[k] ||= []).push(l.replace(/^.*_data\//, ''));
-  return { ok: true, instance: inst, heuristic: true, addons: Object.keys(ADDONS).map(k => ({ name: k, found: !!evid[k], evidence: (evid[k] || []).slice(0, 5) })) };
+  // Version of the Index Server through its JSON API (HTTP Basic with the ELO administrator): getServerInfo.
+  let ix = null;
+  try {
+    const e = await readEnv(inst);
+    if (e?.AUTH_ADMIN_PASSWORD) {
+      const u = e.AUTH_ADMIN_USERNAME || 'Administrator', o = await x.sh(`P=${x.shq(e.AUTH_ADMIN_PASSWORD)}; curl -s -m 20 -u ${x.shq(u)}:"$P" -X POST -H 'Content-Type: application/json' -d '{}' 'http://localhost:${portsOf(e).server}/${e.REPO || 'repository'}/rest/IXServicePortIF/getServerInfo'`, 60);
+      const j = JSON.parse(o.trim().split('\n').pop()).result; ix = { version: j.version, instance: j.instanceName, database: j.databaseEngine, license: String(j.license?.serno || '').trim().split(String.fromCharCode(10)).pop().trim() };
+    }
+  } catch {}
+
+  return { ok: true, instance: inst, heuristic: true, ix, addons: Object.keys(ADDONS).map(k => ({ name: k, found: !!evid[k], evidence: (evid[k] || []).slice(0, 5) })) };
 }));
 app.post('/api/images/remove', wrap(async req => {
   const refs = (req.body?.refs || []).filter(r => /^[\w./:-]+$/.test(r));

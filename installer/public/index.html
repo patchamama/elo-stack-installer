@@ -951,7 +951,8 @@ async function stkAddons() {
   el.textContent = t('adn.checking');
   const r = await api('/stack/addons?instance=' + encodeURIComponent(sel.value));
   if (!r.ok) { el.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
-  el.innerHTML = `<b>${t('adn.title')}</b> ` + r.addons.map(a => `<span class="row" style="gap:5px;margin:2px 12px 2px 0;display:inline-flex" title="${esc(a.evidence.join('\n'))}"><span class="dot ${a.found ? 'ok' : 'idle'}"></span>${esc(a.name)}</span>`).join('') + ` <span class="muted">(${t('adn.heuristic')})</span>`;
+  const ixl = r.ix ? `<div><b>IX</b> ${esc(r.ix.version)} <span class="muted">· ${esc(r.ix.instance || '')} · ${esc(r.ix.database || '')} · ${esc(r.ix.license || '')}</span></div>` : '';
+  el.innerHTML = ixl + `<b>${t('adn.title')}</b> ` + r.addons.map(a => `<span class="row" style="gap:5px;margin:2px 12px 2px 0;display:inline-flex" title="${esc(a.evidence.join('\n'))}"><span class="dot ${a.found ? 'ok' : 'idle'}"></span>${esc(a.name)}</span>`).join('') + ` <span class="muted">(${t('adn.heuristic')})</span>`;
 }
 async function stkSwitch() {
   const name = $('stk-sel').value;
