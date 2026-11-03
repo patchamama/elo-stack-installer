@@ -578,7 +578,7 @@ async function renderAdmin(reload) {
     <div class="card"><b>${t('m.memory')}</b><div class="progress" style="margin:8px 0"><div style="width:${usedPct}%"></div></div>
       <span class="muted">${t('m.usedOf', { used: gb(m.total - m.avail), total: gb(m.total), elo: (totalMem / 1024).toFixed(2) })}</span></div>
     <div class="card"><div class="row"><b>${t('m.engine')}</b><span class="dot ${dockerOn ? 'ok' : 'bad'}"></span><span class="muted">Docker: ${esc(st.docker)}</span>
-      <span class="muted">· ${t('m.stackState', { state: running ? `${running}/${st.containers.length} ${t('d.running')}` : t('d.stopped') })}</span></div>
+      <span class="muted">· ${t('m.stackState', { state: running ? `${running}/${st.containers.filter(c => !/^ix-(setup|import)$/.test(c.service)).length} ${t('d.running')}` : t('d.stopped') })}</span></div>
       <div class="row" style="margin-top:8px">
         ${dockerOn ? (running ? `<button class="btn small" onclick="engine('restart-stack')">${t('m.restartStack')}</button><button class="btn small" onclick="engine('stop-stack')">${t('m.stopStack')}</button>`
                               : `<button class="btn small primary" onclick="engine('start-stack')">${t('m.startStack')}</button>`) : ''}
@@ -902,7 +902,7 @@ async function renderStack() {
   if (!r.ok) { el.innerHTML = `<b>${t('stk.title')}</b> <span class="tbad">${esc(r.error)}</span>`; return; }
   STK.scope = r.scope || 'local';
   el.innerHTML = `<div class="row"><b>${t('stk.title')}</b>
-      <select id="stk-sel">${r.instances.map(i => `<option value="${esc(i.name)}" ${i.name === r.current ? 'selected' : ''}>${esc(i.name)} · ELO ${esc(i.tag || '?')} · ${i.running}/${i.total}${i.name === r.current ? ' ★' : ''}</option>`).join('')}</select>
+      <select id="stk-sel">${r.instances.map(i => `<option value="${esc(i.name)}" ${i.name === r.current ? 'selected' : ''}>${esc(i.name)} · ELO ${esc(i.tag || '?')} · ${i.running}/${i.total}${i.noenv ? ' · ' + t('stk.noenv') : ''}${i.name === r.current ? ' ★' : ''}</option>`).join('')}</select>
       <button class="btn small primary" onclick="stkSwitch()">${t('stk.activate')}</button>
       <button class="btn small" onclick="stkRecover()" title="${esc(t('stk.recoverHint'))}">${t('stk.recover')}</button>
       <button class="btn small danger" onclick="stkDelete()">${t('stk.delete')}</button></div>
@@ -949,6 +949,7 @@ async function stkDelete() {
 async function stkRecover() {
   if (!confirm(t('stk.confirmRecover'))) return;
   stkMsg(t('m.working'));
+  await api('/instances/current', { name: $('stk-sel').value });   // recover works on the selected stack
   const r = await api('/stack/credentials/recover', {});
   if (!r.ok) return stkMsg(`<span class="tbad">${esc(r.error)}</span>`);
   stkMsg(`<span class="tok">${t('stk.recovered', { n: r.recovered, file: esc(r.file) })}</span><br><span class="muted">${t('stk.testing')}</span>`);

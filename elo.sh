@@ -177,7 +177,12 @@ case "$cmd" in
   down)    if [ "${1:-}" = --volumes ]; then docker compose down -v; else docker compose down; fi ;;
   # Remove the instance for good: containers, data volumes, network, configuration; its images only if nothing else uses them.
   delete)  imgs=""; [ -f "$ENVF" ] && imgs=$(docker compose --profile as --profile flows --profile pgadmin config --images 2>/dev/null | sort -u || true)
-           [ -f "$ENVF" ] && { docker compose --profile as --profile flows --profile pgadmin down -v --remove-orphans || true; }
+           if [ -f "$ENVF" ]; then docker compose --profile as --profile flows --profile pgadmin down -v --remove-orphans || true
+           else   # no env file (lost): remove by compose project label, then volumes and network
+             c=$(docker ps -aq --filter "label=com.docker.compose.project=$INST"); [ -z "$c" ] || docker rm -f -v $c
+             v=$(docker volume ls -q --filter "label=com.docker.compose.project=$INST"); [ -z "$v" ] || docker volume rm -f $v
+             docker network rm "$INST-network" >/dev/null 2>&1 || true
+           fi
            if [ "${1:-}" = --images ]; then for i in $imgs; do if docker rmi "$i" >/dev/null 2>&1; then echo "removed image $i"; else echo "kept image $i (in use or missing)"; fi; done; fi
            if [ "$INST" = elo ]; then rm -f .env; else rm -rf "instances/$INST"; fi; echo "instance $INST removed" ;;
   # Why did it (not) start: memory, kernel OOM events, state of every container of the instance.

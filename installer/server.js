@@ -733,9 +733,15 @@ const VBOXM = 'C:\\Program Files\\Oracle\\VirtualBox\\VBoxManage.exe';
 // Probe of a Docker host (run in its Linux environment): every instance of ELO (env files), its volume size and the
 // containers by compose project.
 const instProbe = dir => `cd ${x.shq(dir)} 2>/dev/null
-for f in .env instances/*/.env; do [ -f "$f" ] || continue; n=elo; case "$f" in instances/*) n=$(basename "$(dirname "$f")");; esac
+seen=' '
+for f in .env instances/*/.env; do [ -f "$f" ] || continue; n=elo; case "$f" in instances/*) n=$(basename "$(dirname "$f")");; esac; seen="$seen$n "
   g() { grep -h "^$1=" "$f" | head -1 | cut -d= -f2-; }
   echo "__INST__ $n|$(g ELO_TAG)|$(g REPO)|$(g PORT_SERVER)|$(g PORT_AS)|$(g PORT_FLOWS)|$(g PORT_SEARCH)|$(g PORT_SEARCH_T)|$(g PORT_PGADMIN)|$(g COMPOSE_PROFILES)|$(dirname "$(readlink -f "$f")")"
+  echo "__DISK__ $n|$(du -sbc /var/lib/docker/volumes/\${n}_* 2>/dev/null | tail -1 | cut -f1)"
+done
+for n in $(docker ps -a --format '{{.Label "com.docker.compose.project"}}' 2>/dev/null | grep -E '^elo[a-z0-9]*$' | sort -u); do
+  case "$seen" in *" $n "*) continue;; esac
+  echo "__INST__ $n|$(docker inspect -f '{{.Config.Image}}' $n-server 2>/dev/null | sed 's/.*://')||||||||||noenv"
   echo "__DISK__ $n|$(du -sbc /var/lib/docker/volumes/\${n}_* 2>/dev/null | tail -1 | cut -f1)"
 done
 docker ps -a --format '__SVC__ {{.Names}}|{{.Status}}|{{.Ports}}|{{.Label "com.docker.compose.project"}}' 2>/dev/null`;
@@ -746,11 +752,11 @@ const svcList = out => [...out.matchAll(/^__SVC__ ([^|]*)\|([^|]*)\|([^|]*)(?:\|
 function parseInstances(out) {
   const svcs = svcList(out), disks = Object.fromEntries([...out.matchAll(/^__DISK__ ([^|]*)\|(\d*)\s*$/gm)].map(m => [m[1], +m[2] || null]));
   return [...out.matchAll(/^__INST__ (.*)$/gm)].map(m => {
-    const [name, tag, repo, ps, pa, pf, pse, pst, ppg, profiles, dir] = m[1].split('|');
+    const [name, tag, repo, ps, pa, pf, pse, pst, ppg, profiles, dir, noenv] = m[1].split('|');
     const services = svcs.filter(s => s.project === name);
     // init containers (ix-setup, ix-import) exit by design: they do not count as stopped services
     const main = services.filter(s => !/-ix-(setup|import)$/.test(s.name));
-    return { name, tag, repo, dir, profiles, disk: disks[name] || null, services, running: main.filter(s => /^Up/.test(s.status)).length, total: main.length,
+    return { name, tag, repo, dir, profiles, noenv: noenv === 'noenv', disk: disks[name] || null, services, running: main.filter(s => /^Up/.test(s.status)).length, total: main.length,
       ports: portsOf({ PORT_SERVER: ps, PORT_AS: pa, PORT_FLOWS: pf, PORT_SEARCH: pse, PORT_SEARCH_T: pst, PORT_PGADMIN: ppg }) };
   });
 }
@@ -1065,7 +1071,7 @@ let CURRENT_CHANGED = 0;
 app.get('/api/instances', wrap(async () => {
   await x.detect();
   const insts = parseInstances(await x.sh(instProbe(x.eloDir()), 90));
-  return { ok: true, scope: instScope(), current: curInstance(), instances: insts.map(i => ({ name: i.name, tag: i.tag, repo: i.repo, ports: i.ports, running: i.running, total: i.total })) };
+  return { ok: true, scope: instScope(), current: curInstance(), instances: insts.map(i => ({ name: i.name, noenv: i.noenv, tag: i.tag, repo: i.repo, ports: i.ports, running: i.running, total: i.total })) };
 }));
 
 // ── ELO stack: health, switch the active stack, recover lost credentials ──────
