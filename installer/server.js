@@ -151,7 +151,8 @@ echo "running=$(docker ps --format '{{.Names}}' 2>/dev/null | grep -Eq '^elo[a-z
       value: v.docker || (v.docker_cli ? `installed (${v.docker_cli.replace(/,.*/, '')}) — stopped` : v.os ? 'missing' : '?') },
     { id: 'compose', label: 'Docker Compose', ok: !!v.compose, value: v.compose || (v.os ? 'missing' : '?'), fix: v.compose || !v.os ? undefined : 'install' },
     { id: 'memory', label: 'Memory (Linux side)', ok: gb(v.mem_total) >= 12, warn: gb(v.mem_avail) < 10, value: `${gb(v.mem_avail)} GB free of ${gb(v.mem_total)} GB (full stack ~10-16 GB)` },
-    { id: 'disk', label: 'Disk space (Docker)', ok: gb(v.disk_free) >= 25, value: `${gb(v.disk_free)} GB free (images ~16 GB + data)` },
+    { id: 'disk', label: 'Disk space (Docker)', ok: !!v.docker && gb(v.disk_free) >= 25,
+      value: v.docker ? `${gb(v.disk_free)} GB free (images ~16 GB + data)` : v.os ? 'unknown — Docker is stopped (its disk is measured once it runs)' : '?' },
     { id: 'mmap', label: 'vm.max_map_count (Elasticsearch)', ok: Number(v.max_map_count) >= 262144, value: v.max_map_count, fix: 'set at start' },
     { id: 'ports', label: 'Ports 9090/9060/9010/9200/9204', ok: !Object.entries(v).some(([k, s]) => k.startsWith('port_') && s === 'used'),
       value: Object.entries(v).filter(([k]) => k.startsWith('port_')).map(([k, s]) => `${k.slice(5)}:${s}`).join(' ') },
@@ -178,7 +179,7 @@ app.post('/api/registry/secret', wrap(async req => {
   const { username, password } = req.body || {};
   const r = await fetchCliSecret(username, password);
   session.registry = { username: r.username, secret: r.secret };
-  return { ok: true, username: r.username };
+  return { ok: true, username: r.username, secret: r.secret };
 }));
 
 app.post('/api/registry/login', wrap(async req => {

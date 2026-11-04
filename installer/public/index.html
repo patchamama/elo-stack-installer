@@ -41,6 +41,7 @@ h2 { margin:0 0 4px; font-size:20px; } .lead { color:var(--muted); margin:0 0 18
 .grid2 { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:12px 14px; }
 .grid2 > div { display:flex; flex-direction:column; justify-content:flex-end; min-width:0; } .grid2 > div > label { line-height:1.3; }
 .grid2 input[type=text], .grid2 input[type=number], .grid2 input[type=password], .grid2 select { width:100%; box-sizing:border-box; }
+.spin { display:inline-block; width:.85em; height:.85em; margin-right:6px; vertical-align:-.12em; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:spin .7s linear infinite; } @keyframes spin { to { transform:rotate(360deg); } }
 .pbar { height:14px; background:var(--sur2); border:1px solid var(--border); border-radius:7px; overflow:hidden; margin:8px 0 2px; } .pbar > div { height:100%; width:0; background:linear-gradient(90deg,var(--green),var(--accent2)); transition:width .4s; }
 label { display:block; font-size:12px; color:var(--muted); margin-bottom:4px; }
 input[type=text], input[type=password], input[type=number], select, textarea { width:100%; padding:8px 10px; background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px; font-size:13px; }
@@ -92,13 +93,44 @@ pre.log { background:var(--log); color:var(--logtext); font:12px/1.45 var(--mono
 <script>
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-// A button that starts a process (start, resume, stop, restart…) gets a pin so it is clear it was triggered.
-document.addEventListener('click', ev => {
-  const b = ev.target.closest?.('button'); if (!b || b.dataset.pinned) return;
-  if (!/(instAction|svc|engine|wslAction|stkSwitch|optional|instUse|stkRecover)\(/.test(b.getAttribute('onclick') || '')) return;
-  setTimeout(() => { b.dataset.pinned = '1'; b.textContent = '📌 ' + b.textContent.trim(); b.disabled = true; b.title = ''; }, 0);
-}, true);
-const api = async (u, body) => (await fetch('/api' + u, body === undefined ? {} : { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) })).json().catch(e => ({ ok:false, error:e.message }));
+// A button that triggers an async action shows a spinner until the action ends (functions wrapped at the end of the script).
+let CLICKBTN = null;
+document.addEventListener('click', ev => { const b = ev.target.closest?.('button'); if (b && !b.disabled) { CLICKBTN = b; setTimeout(() => { CLICKBTN = null; }, 0); } }, true);
+function spinWrap(fn) {
+  return function (...a) {
+    const b = CLICKBTN; CLICKBTN = null;
+    const res = fn.apply(this, a);
+    if (!b || !b.isConnected || !res || typeof res.then !== 'function') return res;
+    const html = b.innerHTML, dis = b.disabled; b.disabled = true; b.innerHTML = '<span class="spin"></span>' + html;
+    const done = () => { if (b.isConnected) { b.innerHTML = html; b.disabled = dis; } };
+    res.then(done, done); return res;
+  };
+}
+const api = async (u, body) => {
+  try {
+    const r = await fetch('/api' + u, body === undefined ? {} : { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }), tx = await r.text();
+    try { return JSON.parse(tx); } catch { return { ok:false, error: /^\s*</.test(tx) ? `The installer answered HTTP ${r.status} (not JSON) for ${u} — it is probably an older version or was restarted: restart it and reload this page.` : tx.slice(0, 300) }; }
+  } catch (e) { return { ok:false, error:e.message }; }
+};
+// CLI secret / registry user remembered in this browser, encrypted: AES-GCM key (not extractable) in IndexedDB, ciphertext in localStorage.
+const idb = () => new Promise((ok, ko) => { const q = indexedDB.open('elo-installer', 1); q.onupgradeneeded = () => q.result.createObjectStore('keys'); q.onsuccess = () => ok(q.result); q.onerror = () => ko(q.error); });
+async function vaultKey() {
+  const db = await idb();
+  const k0 = await new Promise((ok, ko) => { const r = db.transaction('keys').objectStore('keys').get('k'); r.onsuccess = () => ok(r.result); r.onerror = () => ko(r.error); });
+  if (k0) return k0;
+  const k = await crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  await new Promise((ok, ko) => { const tx = db.transaction('keys', 'readwrite'); tx.objectStore('keys').put(k, 'k'); tx.oncomplete = ok; tx.onerror = () => ko(tx.error); });
+  return k;
+}
+const b64 = u => btoa(String.fromCharCode(...u)), unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+async function vaultSet(name, text) {
+  try { const k = await vaultKey(), iv = crypto.getRandomValues(new Uint8Array(12)), ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, new TextEncoder().encode(text)));
+    localStorage.setItem('elo-v-' + name, b64(iv) + '.' + b64(ct)); } catch {}
+}
+async function vaultGet(name) {
+  try { const s = localStorage.getItem('elo-v-' + name); if (!s) return ''; const [iv, ct] = s.split('.');
+    return new TextDecoder().decode(await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(iv) }, await vaultKey(), unb64(ct))); } catch { return ''; }
+}
 const gb = b => b == null || isNaN(b) ? '' : (b / 1e9).toFixed(2) + ' GB';
 const rnd = () => Array.from(crypto.getRandomValues(new Uint8Array(12)), b => 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'[b % 56]).join('');
 const store = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
@@ -356,6 +388,8 @@ function registry() {
   </div>
   ` + nav(!!W.inv || W.checks?.loggedIn);
   localCard();
+  vaultGet('reg-user').then(v => { if (v && !$('r-user').value) $('r-user').value = v; });
+  vaultGet('reg-secret').then(v => { if (v && !$('r-secret').value) $('r-secret').value = v; });
 }
 // Local images (Docker + local cache) are read as soon as the page opens; choosing them skips the registry.
 async function localCard() {
@@ -375,12 +409,15 @@ async function useLocal() {
   W.inv = inv; next();
 }
 async function regLogin() {
-  const user = $('r-user').value.trim(), secret = $('r-secret').value, pass = $('r-pass').value;
+  const user = $('r-user').value.trim(), pass = $('r-pass').value; let secret_ = '';
+  const secret = $('r-secret').value;
   $('r-msg').innerHTML = `<span class="muted">${t('g.signing')}</span>`;
-  if (!secret && pass) { const s = await api('/registry/secret', { username: user, password: pass }); if (!s.ok) return $('r-msg').innerHTML = `<span class="tbad">${esc(s.error)}</span>`; }
+  if (!secret && pass) { const s = await api('/registry/secret', { username: user, password: pass }); if (!s.ok) return $('r-msg').innerHTML = `<span class="tbad">${esc(s.error)}</span>`; if (s.secret) { $('r-secret').value = secret_ = s.secret; } }
   const l = await api('/registry/login', { username: user, secret: secret || undefined });
   if (!l.ok) return $('r-msg').innerHTML = `<span class="tbad">${esc(l.error)}</span>`;
   $('r-msg').innerHTML = `<span class="tok">${t('g.ok')}</span>`;
+  if (user) vaultSet('reg-user', user);
+  if (secret || secret_) vaultSet('reg-secret', secret || secret_);
   const inv = await api('/registry/inventory', {});
   if (!inv.ok) return $('r-msg').innerHTML = `<span class="tbad">${esc(inv.error)}</span>`;
   W.inv = inv; next();
@@ -619,7 +656,42 @@ async function renderAdmin(reload) {
   <div class="card" id="adm-cache"><b>${t('cch.title')}</b> <span class="muted">${t('a.loading')}</span></div>
   <div class="card" id="adm-inst"><b>${t('inst.title')}</b> <span class="muted">${t('a.loading')}</span></div>
   <div class="card" id="adm-wsl" hidden></div>
+  <div id="adm-engine"></div>
+  ${accessHtml(st)}
+  <div class="card" id="adm-ix"><div class="row"><b>${t('x.title')}</b><span class="muted">${t('x.note')}</span>
+    <button class="btn small primary right" onclick="ixTest($('adm-ix'))">${t('x.run')}</button></div></div>
+  ${st.javaClient ? `<div class="card"><b>${t('m.java')}</b><p class="muted" style="margin:4px 0">${esc(st.javaClient.note)}</p>
+    <div class="row"><code>${esc(st.javaClient.ixUrl)}</code><button class="btn small" onclick="navigator.clipboard.writeText('${esc(st.javaClient.ixUrl)}')">${t('m.copyIx')}</button>
+    <span class="muted">${t('m.user')}: ${esc(st.javaClient.user)}</span>
+      <button class="btn small primary" title="dms://&lt;guid&gt;" onclick="openJavaClient()">${t('jc.open')}</button></div><p class="muted" style="margin:4px 0 0">${t('jc.note')}</p></div>` : ''}
   <div class="grid2">
+    <div id="adm-optional"></div>
+    <div class="card"><b>${t('m.license')}</b><p class="muted" style="margin:4px 0">${t('m.licenseNote')}</p>
+      <input type="file" onchange="admLicense(this.files[0])"><div id="adm-lic-msg" class="muted" style="margin-top:6px"></div></div>
+  </div>
+  <div class="card"><b>${t('m.files')}</b><p class="muted" style="margin:4px 0">${t('m.filesNote')}</p>
+    <div class="row">${['logsDir:logs', 'archive:archive', 'system:system', 'data:data'].map(s => { const [k, w] = s.split(':'); return `<button class="btn small" onclick="openDir('${w}')">${t('m.' + k)}</button>`; }).join('')}
+      <span id="open-msg" class="muted"></span></div></div>
+  <div class="grid2">
+    <div class="card"><b>${t('m.settings')}</b><table>${Object.entries(st.settings || {}).map(([k, v]) => `<tr><td class="muted">${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table></div>
+    <div class="card"><b>${t('m.net')}</b><p class="muted">${t('m.netNote')}</p>
+      <div class="row"><button class="btn small" onclick="expose()">${t('m.expose')}</button><button class="btn small" onclick="show('containers')">${t('tab.containers')} →</button></div></div>
+  </div>`;
+  renderEngine(); renderOptional();
+  renderInstallations(reload);
+  renderStack();
+  renderCacheCard();
+}
+const refreshBtn = fn => `<button class="btn small right" title="${esc(t('m.refresh'))}" onclick="${fn}">⟳</button>`;
+// Engine/stack + services: its own component, refreshed alone (reload=true re-reads the status).
+async function renderEngine(reload) {
+  const el = $('adm-engine'); if (!el) return;
+  if (reload) { CACHE.status = null; await loadStatus(true); }
+  const st = CACHE.status; if (!st?.ok) return;
+  const m = st.memory || {}, usedPct = m.total ? Math.round((m.total - m.avail) / m.total * 100) : 0;
+  const totalMem = st.containers.reduce((a, c) => a + memMB(c.mem), 0);
+  const running = st.containers.filter(c => c.state === 'running').length, dockerOn = st.docker === 'active';
+  el.innerHTML = `<div class="row">${refreshBtn('renderEngine(true)')}</div>` + `  <div class="grid2">
     <div class="card"><b>${t('m.memory')}</b><div class="progress" style="margin:8px 0"><div style="width:${usedPct}%"></div></div>
       ${W.isWindows ? `<div style="margin-top:8px"><button class="btn small danger" onclick="memWslOff()">${t('wsl.shutdown')}</button> <span id="mem-wsl-msg" class="muted"></span></div>` : ''}
       <span class="muted">${t('m.usedOf', { used: gb(m.total - m.avail), total: gb(m.total), elo: (totalMem / 1024).toFixed(2) })}</span></div>
@@ -639,33 +711,20 @@ async function renderAdmin(reload) {
       <td class="row">${init ? '' : on ? `<button class="btn small" onclick="svc('restart','${c.service}')">${t('m.restart')}</button><button class="btn small" onclick="svc('stop','${c.service}')">${t('m.stop')}</button>`
         : `<button class="btn small primary" onclick="svc('start','${c.service}')">${t('m.start')}</button>`}<button class="btn small" onclick="logs('${c.service}')">${t('m.logs')}</button></td></tr>`; }).join('')}
     </table></div><pre class="log" id="adm-log" hidden style="margin-top:10px"></pre></div>
-  ${accessHtml(st)}
-  <div class="card" id="adm-ix"><div class="row"><b>${t('x.title')}</b><span class="muted">${t('x.note')}</span>
-    <button class="btn small primary right" onclick="ixTest($('adm-ix'))">${t('x.run')}</button></div></div>
-  ${st.javaClient ? `<div class="card"><b>${t('m.java')}</b><p class="muted" style="margin:4px 0">${esc(st.javaClient.note)}</p>
-    <div class="row"><code>${esc(st.javaClient.ixUrl)}</code><button class="btn small" onclick="navigator.clipboard.writeText('${esc(st.javaClient.ixUrl)}')">${t('m.copyIx')}</button>
-    <span class="muted">${t('m.user')}: ${esc(st.javaClient.user)}</span>
-      <button class="btn small primary" title="dms://&lt;guid&gt;" onclick="openJavaClient()">${t('jc.open')}</button></div><p class="muted" style="margin:4px 0 0">${t('jc.note')}</p></div>` : ''}
-  <div class="grid2">
-    <div class="card"><b>${t('m.optional')}</b><p class="muted" style="margin:4px 0">${t('m.optionalNote')}</p>
+`;
+}
+// Optional services (profiles).
+function renderOptional() {
+  const el = $('adm-optional'); if (!el) return;
+  const st = CACHE.status, profiles = (st.settings?.COMPOSE_PROFILES || '').split(',');
+  el.innerHTML = `    <div class="card"><b>${t('m.optional')}</b><p class="muted" style="margin:4px 0">${t('m.optionalNote')}</p>
       ${[['as', 'Automation Services'], ['flows', 'ELO Flows (+ worker)'], ['pgadmin', 'pgAdmin (5050)']].map(([id, label]) => { const on = profiles.includes(id);
         return `<div class="row" style="margin:6px 0"><span class="dot ${on ? 'ok' : 'idle'}"></span>${label}<button class="btn small right" onclick="optional('${id}', ${!on})">${on ? t('m.off') : t('m.on')}</button></div>`; }).join('')}
       <div style="margin-top:8px"><a class="btn small" target="_blank" href="${esc(st.urls?.pgAdmin || '#')}">${t('m.openPgadmin')}</a></div></div>
-    <div class="card"><b>${t('m.license')}</b><p class="muted" style="margin:4px 0">${t('m.licenseNote')}</p>
-      <input type="file" onchange="admLicense(this.files[0])"><div id="adm-lic-msg" class="muted" style="margin-top:6px"></div></div>
-  </div>
-  <div class="card"><b>${t('m.files')}</b><p class="muted" style="margin:4px 0">${t('m.filesNote')}</p>
-    <div class="row">${['logsDir:logs', 'archive:archive', 'system:system', 'data:data'].map(s => { const [k, w] = s.split(':'); return `<button class="btn small" onclick="openDir('${w}')">${t('m.' + k)}</button>`; }).join('')}
-      <span id="open-msg" class="muted"></span></div></div>
-  <div class="grid2">
-    <div class="card"><b>${t('m.settings')}</b><table>${Object.entries(st.settings || {}).map(([k, v]) => `<tr><td class="muted">${esc(k)}</td><td>${esc(v)}</td></tr>`).join('')}</table></div>
-    <div class="card"><b>${t('m.net')}</b><p class="muted">${t('m.netNote')}</p>
-      <div class="row"><button class="btn small" onclick="expose()">${t('m.expose')}</button><button class="btn small" onclick="show('containers')">${t('tab.containers')} →</button></div></div>
-  </div>`;
-  renderInstallations(reload);
-  renderStack();
-  renderCacheCard();
+`;
 }
+// After something changes the state of the stack, only the components that depend on it are re-read.
+function refreshStackParts() { renderEngine(true); renderInstallations(true); renderStack(); }
 // Memory of this computer: stacked bar by consumer (WSL, Hyper-V VMs, VirtualBox, Docker Desktop), system, free + legend.
 async function renderHostMem(reload) {
   const el = $('adm-mem'); if (!el) return;
@@ -675,7 +734,7 @@ async function renderHostMem(reload) {
   const segs = [...m.parts, { key: 'free', bytes: m.free }], pct = b => (b / m.total * 100);
   const label = s => t('hm.' + s.key) + (s.name ? ` · ${s.name}` : '');
   el.innerHTML = `<div class="row"><b>${t('hm.title')}</b><span class="muted">${t('hm.summary', { used: gb(m.total - m.free), total: gb(m.total), free: gb(m.free) })}</span>
-      <button class="btn small right" onclick="renderHostMem(true)">${t('m.refresh')}</button></div>
+      ${refreshBtn('renderHostMem(true)')}</div>
     <div class="membar">${segs.map(s => `<div class="mem-${s.key}" style="width:${pct(s.bytes).toFixed(2)}%" title="${esc(label(s))}: ${gb(s.bytes)}"></div>`).join('')}</div>
     <div class="row memlegend">${segs.map(s => `<span><i class="mem-${s.key}"></i>${esc(label(s))} <b>${gb(s.bytes)}</b> <span class="muted">${pct(s.bytes).toFixed(0)}%</span></span>`).join('')}</div>
     ${m.parts.some(p => p.key === 'wsl') ? `<p class="muted" style="margin:6px 0 0">${t('hm.note')}</p>` : ''}`;
@@ -689,7 +748,7 @@ async function renderInstallations(reload) {
   if (!r.ok) { el.innerHTML = `<b>${t('inst.title')}</b> <span class="tbad">${esc(r.error)}</span>`; return; }
   const dot = s => s === 'running' ? 'ok' : s === 'stopped' ? 'idle' : 'warn';
   el.innerHTML = `<div class="row"><b>${t('inst.title')}</b><span class="muted">${t('inst.note')}</span>
-      <button class="btn small right" onclick="renderInstallations(true)">${t('m.refresh')}</button></div>
+      ${refreshBtn('renderInstallations(true)')}</div>
     ${r.installations.length ? `<div class="tablewrap"><table><tr><th>${t('inst.name')}</th><th>${t('inst.type')}</th><th>${t('m.state')}</th><th>${t('inst.detail')}</th><th></th></tr>
     ${r.installations.map((i, n) => {
       // Collapsed details row: services (ELO containers) and open ports, only while running.
@@ -739,7 +798,7 @@ async function instAction(id, action) {
       <div class="row" style="margin-top:8px"><span>${Object.entries(s).map(([k, v]) => `${k.replace('PORT_', '')} ${v}`).join(' · ')}</span>
       <button class="btn small primary" onclick="instOtherPorts('${esc(id)}','${esc(inst)}',${esc(JSON.stringify(s))})">${t('inst.useOtherPorts')}</button></div></div>`);
   }
-  CACHE.status = null; await renderInstallations(true);
+  CACHE.status = null; await renderInstallations(true); renderEngine(true); renderStack();
   if (r.lastRun) lastRun(r.instance, true);
 }
 async function instOtherPorts(id, inst, ports) {
@@ -949,7 +1008,7 @@ async function memWslOff() {
   const m = $('mem-wsl-msg'); m.textContent = t('m.working');
   const r = await api('/wsl', { action: 'shutdown' });
   if (!r.ok) { m.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
-  CACHE.status = null; renderAdmin(true);
+  CACHE.status = null; await renderEngine(true); renderHostMem(true); renderInstallations(true);
 }
 async function wslAction(action, sure) {
   if (action === 'shutdown' && !sure) {
@@ -974,6 +1033,7 @@ async function renderStack() {
   el.innerHTML = `<div class="row"><b>${t('stk.title')}</b>
       <select id="stk-sel" onchange="stkAddons()">${r.instances.map(i => `<option value="${esc(i.name)}" ${i.name === r.current ? 'selected' : ''}>${esc(i.name)} · ELO ${esc(i.tag || '?')} · ${i.running}/${i.total}${i.noenv ? ' · ' + t('stk.noenv') : ''}${i.name === r.current ? ' ★' : ''}</option>`).join('')}</select>
       <button class="btn small primary" onclick="stkSwitch()">${t('stk.activate')}</button>
+      ${refreshBtn('renderStack()')}
       <button class="btn small" onclick="stkRecover()" title="${esc(t('stk.recoverHint'))}">${t('stk.recover')}</button>
       <button class="btn small danger" onclick="stkDelete()">${t('stk.delete')}</button></div>
     <div id="stk-msg" class="muted" style="margin-top:8px">${STK.last || t('stk.note')}</div><div id="stk-addons" class="muted" style="margin-top:8px"></div>`;
@@ -1012,7 +1072,7 @@ function stkWatch(startedAt, name) {
     const s = await api('/stack/switch'); if (!s.ok || !s.switch) return;
     phase = s.switch.phase; health = s.health || null;
     if (phase === 'error') { stkStop(); return stkMsg(`<span class="tbad">${esc(s.switch.error)}</span>`); }
-    if (phase === 'done' || health?.active) { stkStop(); CACHE.status = null; stkMsg(`<span class="dot ok"></span> <b class="tok">${t('stk.active', { name: esc(name) })}</b>`); renderAdmin(true); }
+    if (phase === 'done' || health?.active) { stkStop(); CACHE.status = null; stkMsg(`<span class="dot ok"></span> <b class="tok">${t('stk.active', { name: esc(name) })}</b>`); CACHE.inst = null; renderEngine(true); renderInstallations(true); }
   };
   draw(); STK.tick = setInterval(draw, 1000);
   setTimeout(check, 3000); STK.poll = setInterval(check, 30000);
@@ -1048,7 +1108,7 @@ async function renderCacheCard() {
   if (!i.ok) { el.innerHTML = `<b>${t('cch.title')}</b> <span class="tbad">${esc(i.error)}</span>`; return; }
   const total = i.backups.reduce((a, b) => a + (b.size || 0), 0);
   el.innerHTML = `<div class="row"><b>${t('cch.title')}</b><span class="muted">${i.backups.length} · ${gb(total)}</span>
-      <button class="btn small right" onclick="admOpenCache()">📂 ${t('k.openCache')}</button>
+      ${refreshBtn('renderCacheCard()')}<button class="btn small" onclick="admOpenCache()">📂 ${t('k.openCache')}</button>
       ${i.backups.length ? `<button class="btn small danger" onclick="cacheDelete(${esc(JSON.stringify(i.backups.map(b => b.file)))})">${t('cch.deleteAll')}</button>` : ''}</div>
     <span id="adm-cache-msg" class="muted"></span>
     ${i.backups.length ? `<div class="tablewrap"><table><tr><th>${t('k.image')}</th><th>${t('k.size')}</th><th>${t('m.created')}</th><th></th></tr>
@@ -1064,11 +1124,11 @@ async function cacheDelete(files) {
   if (!r.ok) alert(r.error);
   CACHE.containers = null; renderCacheCard();
 }
-async function svc(action, s) { admOut(t('m.working')); const r = await api('/service', { action, services: [s] }); if (!r.ok) admOut(r.error); renderAdmin(true); }
-async function engine(action) { admOut(t('m.working')); const r = await api('/engine', { action }); admOut(r.ok ? r.out : r.error); setTimeout(() => renderAdmin(true), 1000); }
+async function svc(action, s) { admOut(t('m.working')); const r = await api('/service', { action, services: [s] }); if (!r.ok) admOut(r.error); await renderEngine(true); renderStack(); }
+async function engine(action) { admOut(t('m.working')); const r = await api('/engine', { action }); admOut(r.ok ? r.out : r.error); await new Promise(ok => setTimeout(ok, 1000)); await renderEngine(true); renderInstallations(true); renderStack(); }
 async function logs(s) { const r = await api('/logs/' + s), o = $('adm-log'); o.hidden = false; o.textContent = r.ok ? r.out : r.error; o.scrollTop = 1e9; }
 async function expose() { admOut(t('m.working')); const r = await api('/expose', {}); admOut(r.ok ? `${r.note || ''}\n${r.ip ? 'WSL IP ' + r.ip + ' · ports ' + r.ports.join(', ') : ''}` : r.error); }
-async function optional(name, enable) { admOut(t('m.working')); const r = await api('/optional', { name, enable }); admOut(r.ok ? r.out : r.error); renderAdmin(true); }
+async function optional(name, enable) { admOut(t('m.working')); const r = await api('/optional', { name, enable }); admOut(r.ok ? r.out : r.error); await renderEngine(true); renderOptional(); }
 async function openDir(what) { $('open-msg').textContent = t('m.opening'); const r = await api('/open', { what }); $('open-msg').textContent = r.ok ? (r.path || r.linuxPath) + (r.note ? ' — ' + r.note : '') : r.error; }
 async function admLicense(f) {
   if (!f) return;
@@ -1177,6 +1237,8 @@ async function refreshEnv() { const e = await api('/target'); $('envinfo').textC
   await loadStatus();                       // detected installation → banner on the welcome page
   if (VIEW === 'install' && W.step === 0) welcome();
 })();
+// Spinner on every button whose action is asynchronous.
+for (const n of ["instAction","svc","engine","optional","stkSwitch","stkDelete","stkRecover","stkAddons","memWslOff","wslAction","instUse","reqStart","expose","ctr","rmImage","cacheDelete","elCheck","elAddons","elPrepare","elApply","elSaveCreds","instDeleteGo","vmMemApply","ixTest","saveCreds","regLogin","useLocal","openDir","admOpenCache","openCache","instViewer","deskOpen","showAccess","lastRun","instOpen","saveSources","checkSources","testSsh","admLicense","renderAdmin","renderInstallations","renderHostMem","renderStack","renderCacheCard","renderEngine","instOtherPorts","logs","stkSwitch"]) if (typeof window[n] === 'function') window[n] = spinWrap(window[n]);
 </script>
 </body>
 </html>
