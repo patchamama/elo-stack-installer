@@ -153,10 +153,26 @@ case "$cmd" in
            for img in $imgs; do
              echo "__PROGRESS__ $k/$n $img"; k=$((k+1))
              tar="backup/$(echo "$img" | tr '/:' '~@').tar"
-             [ -f "$tar" ] && { echo "cached  $img"; continue; }
+             [ -f "$tar" ] && { echo "[$k/$n] cached  $img"; continue; }
+             echo "[$k/$n] $img"
              docker image inspect "$img" >/dev/null 2>&1 || docker pull -q "$img" >/dev/null || { echo "ERROR pulling $img"; exit 1; }
-             docker save -o "$tar" "$img" && echo "saved   $img ($(du -h "$tar" | cut -f1))"
-           done ;;
+             docker save -o "$tar" "$img" && echo "        saved ($(du -h "$tar" | cut -f1))"
+           done
+           echo "__PROGRESS__ $n/$n done"
+           # Manifest next to the images: what the cache holds + the stack configuration (without passwords), so the
+           # installer can list and configure this version without internet; docker-compose.yml is kept with it.
+           etag=$(grep -s '^ELO_TAG=' "$ENVF" | cut -d= -f2); js() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+           [ -f docker-compose.yml ] && cp docker-compose.yml "backup/docker-compose-$etag.yml"
+           { echo "{"; echo "  \"savedAt\": \"$(date -u +%FT%TZ)\", \"eloTag\": \"$etag\", \"searchTag\": \"$(grep -s '^ELO_SEARCH_TAG=' "$ENVF" | cut -d= -f2)\","
+             echo "  \"compose\": \"docker-compose-$etag.yml\","
+             echo "  \"images\": ["; f=1
+             for img in $imgs; do t="$(echo "$img" | tr '/:' '~@').tar"; [ $f = 1 ] || echo ","; f=0
+               printf '    {"ref": "%s", "file": "%s", "size": %s}' "$(js "$img")" "$t" "$(stat -c %s "backup/$t" 2>/dev/null || echo 0)"; done
+             echo; echo "  ],"; echo "  \"config\": {"; f=1
+             for kv in $(grep -sE '^(PORT_[A-Z_]+|REPO|REPO_LANGUAGE|ELO_LICENSE_TYPE|COMPOSE_PROFILES|AUTH_ADMIN_USERNAME|DATABASE_USERNAME)=' "$ENVF"); do
+               [ $f = 1 ] || echo ","; f=0; printf '    "%s": "%s"' "${kv%%=*}" "$(js "${kv#*=}")"; done
+             echo; echo "  }"; echo "}"; } > "backup/manifest-$etag.json"
+           echo "manifest backup/manifest-$etag.json" ;;
   up)      make_env; sysctl -w vm.max_map_count=262144 >/dev/null; docker compose up -d ;;
   status)  REPO=$(grep -h '^REPO=' "$ENVF" | cut -d= -f2-); PORT_SERVER=$(grep -h '^PORT_SERVER=' "$ENVF" | cut -d= -f2-)   # not sourced: values may hold spaces
            docker compose ps -a --format 'table {{.Name}}\t{{.State}}\t{{.Status}}'
@@ -178,7 +194,8 @@ case "$cmd" in
            docker logs $INST-ix-setup 2>&1 | grep -i -E 'license|customer1' | tail -5
            docker compose restart server ;;
   logs)    docker compose logs --no-color --tail "${2:-200}" "$1" ;;
-  down)    if [ "${1:-}" = --volumes ]; then docker compose down -v; else docker compose down; fi ;;
+  down)    [ -f "$ENVF" ] || { echo "no $ENVF yet: nothing to remove"; exit 0; }
+           if [ "${1:-}" = --volumes ]; then docker compose down -v; else docker compose down; fi ;;
   # Remove the instance for good: containers, data volumes, network, configuration; its images only if nothing else uses them.
   delete)  imgs=""; [ -f "$ENVF" ] && imgs=$(docker compose --profile as --profile flows --profile pgadmin config --images 2>/dev/null | sort -u || true)
            if [ -f "$ENVF" ]; then docker compose --profile as --profile flows --profile pgadmin down -v --remove-orphans || true

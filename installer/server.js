@@ -10,7 +10,8 @@ const x = require('./exec');
 const { inventory, fetchCliSecret } = require('../tools/registry-inventory');
 const { acceptEula, webClientCheck } = require('./eula');
 
-const PORT = Number(process.env.ELO_INSTALLER_PORT) || 3200;
+const WANTED_PORT = Number(process.env.ELO_INSTALLER_PORT) || 3200;
+let PORT = WANTED_PORT;
 const ELO = x.ELO_DIR;
 const DOCS_DIR = path.join(ELO, '..', '..', 'docs');      // ELO partner documentation copied by the user (git-ignored)
 const PORTS = { server: 9090, as: 9060, flows: 9010, search: 9200, 'search-transport': 9204 };
@@ -242,7 +243,13 @@ app.get('/api/local-inventory', wrap(async () => {
   for (const ref of Object.keys(loc.docker)) add(ref, true, loc.cached.has(ref), null);
   for (const t of loc.tars) add(t.ref, t.ref in loc.docker, true, t.size);
   const repos = Object.entries(byRepo).map(([name, tags]) => ({ name, pulls: null, description: '', tags: Object.values(tags).sort((a, b) => compareTags(a.tag, b.tag)) }));
-  return { ok: true, generated: new Date().toISOString(), repos, source: 'local' };
+  // Manifests written next to the images by "Save in the local cache": stack configuration available offline.
+  const manifests = {};
+  try {
+    const out = await x.sh(`for f in ${x.shq(x.eloDir() + '/backup')}/manifest-*.json; do [ -f "$f" ] && { echo __M__; cat "$f"; }; done 2>/dev/null`, 60);
+    for (const part of out.split('__M__').map(s => s.trim()).filter(Boolean)) { try { const m = JSON.parse(part); if (m.eloTag) manifests[m.eloTag] = m; } catch {} }
+  } catch {}
+  return { ok: true, generated: new Date().toISOString(), repos, source: 'local', manifests };
 }));
 
 // Save the images of a version (all stack services incl. optional ones) into the local cache.
@@ -1316,5 +1323,15 @@ const terminals = require('./terminal')({ app, wrap, SSH_KEY, VM_DIR: prov.VM_DI
 
 require('./elolinks')({ app, wrap, terminals, localOnly: terminals.localOnly });
 
-const server = app.listen(PORT, () => console.log(`ELO installer: http://localhost:${PORT}`));
+// If the port is taken (another installer, another program) the next free one is used; the page is served by this
+// backend, so the frontend always talks to the port it was loaded from.
+const server = require('http').createServer(app);
+server.on('listening', () => {
+  console.log(`ELO installer: http://localhost:${PORT}${PORT !== WANTED_PORT ? ` (port ${WANTED_PORT} was busy)` : ''}`);
+  if (process.env.ELO_OPEN_BROWSER) { const u = `http://localhost:${PORT}`; try { require('child_process').exec(process.platform === 'win32' ? `start "" ${u}` : `xdg-open ${u}`).on('error', () => {}); } catch {} }
+});
+server.on('error', e => {
+  if (e.code === 'EADDRINUSE' && PORT < WANTED_PORT + 100) { console.log(`port ${PORT} is busy, trying ${PORT + 1}`); server.listen(++PORT); } else throw e;
+});
+server.listen(PORT);
 terminals.attach(server);

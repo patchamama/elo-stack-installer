@@ -8,6 +8,6 @@ if errorlevel 1 (
     exit /b 0
 )
 if not exist "%~dp0node_modules\express" (pushd "%~dp0" & call npm install --no-fund --no-audit & popd)
-start "" http://localhost:3200
+set ELO_OPEN_BROWSER=1
 node "%~dp0server.js"
 endlocal

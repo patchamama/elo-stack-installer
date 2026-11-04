@@ -226,9 +226,9 @@ async function runJob(endpoint, body, el, onDone, onLine) {
     if (pm) { const pct = Math.round(+pm[1] / +pm[2] * 100); pb.hidden = pl.hidden = false; pb.firstElementChild.style.width = pct + '%'; pl.textContent = `${pm[1]}/${pm[2]} · ${pct}% · ${pm[3]}`; return; }
     onLine?.(line);
     if (line.startsWith('__REBOOT__ ')) { list.insertAdjacentHTML('beforeend', `<p class="twarn"><b>${t('job.reboot')}:</b> ${esc(line.slice(11))}</p>`); return; }
-    if (line.startsWith('__EXIT__:')) { list.querySelectorAll('div').forEach(d => d.className = 'done'); if (!pb.hidden) pb.firstElementChild.style.width = '100%'; return; }
+    if (line.startsWith('__EXIT__:')) { list.querySelectorAll('div').forEach(d => d.className = 'done'); if (!pb.hidden && line.trim() === '__EXIT__:0') { pb.firstElementChild.style.width = '100%'; pl.textContent = '100%'; } return; }
     log.textContent += line + '\n'; log.scrollTop = 1e9;
-  }, ok => onDone?.(ok));
+  }, ok => { if (ok && !pb.hidden) { pb.firstElementChild.style.width = '100%'; pl.textContent = '100% ✔'; } onDone?.(ok); });
 }
 
 // ── 1 Welcome: detected installation + target and its provisioning ──────────
@@ -407,7 +407,13 @@ async function localCard() {
   el.innerHTML = `<div class="row"><b>${t('g.localTitle')}</b><span class="muted">${t('g.localFound', { n: tags.length })}</span>
     ${sel ? `<span class="tok right">✔ ${t('g.localSelected')}</span>` : ''}<button class="btn ${sel ? '' : 'primary'} small ${sel ? '' : 'right'}" onclick="useLocal()">${t('g.local')}</button></div>
     <div style="margin-top:6px">${tags.map(x => `<span class="row" style="gap:6px;margin:3px 14px 3px 0;display:inline-flex"><span class="dot ok"></span><b>${esc(x.tag)}</b> <span class="muted">${x.local ? t('i.inDocker') : t('i.cachedShort')}</span></span>`).join('')}</div>
-    <div class="muted" style="margin-top:6px">${t('g.localNote')}</div>`;
+    <div class="muted" style="margin-top:6px">${t('g.localNote')}</div>
+    ${Object.keys(inv.manifests || {}).length ? `<div class="muted" style="margin-top:4px">📄 ${t('g.manifests', { list: Object.values(inv.manifests).map(m => esc(m.eloTag) + ' (+ iSearch ' + esc(m.searchTag) + ')').join(', ') })}</div>` : ''}`;
+}
+// Offline: the manifest saved with the cache tells which iSearch goes with a version.
+function applyManifest() {
+  const m = (W.inv?.manifests || W.localInv?.manifests || {})[W.cfg.ELO_TAG]; if (!m?.searchTag) return;
+  W.cfg.ELO_SEARCH_TAG = m.searchTag; const s = $('i-search'); if (s && [...s.options].some(o => o.value === m.searchTag)) s.value = m.searchTag;
 }
 async function useLocal() {
   const inv = await api('/local-inventory');
@@ -446,8 +452,8 @@ function images() {
   $('page').innerHTML = `<h2>${t('i.title')}</h2><p class="lead">${W.inv.source === 'local' ? t('i.sourceLocal') : t('i.lead', { date: esc(W.inv.generated.slice(0, 16).replace('T', ' ')) })}</p>
   <div class="explain">${t('i.explain')}</div>
   <div class="card grid2">
-    <div><label>${t('i.version')}</label><select onchange="W.cfg.ELO_TAG=this.value;availability()">${opt('server', W.cfg.ELO_TAG)}</select></div>
-    <div><label>${t('i.search')}</label><select onchange="W.cfg.ELO_SEARCH_TAG=this.value;availability()">${opt('search', W.cfg.ELO_SEARCH_TAG)}</select></div>
+    <div><label>${t('i.version')}</label><select onchange="W.cfg.ELO_TAG=this.value;applyManifest();availability()">${opt('server', W.cfg.ELO_TAG)}</select></div>
+    <div><label>${t('i.search')}</label><select id="i-search" onchange="W.cfg.ELO_SEARCH_TAG=this.value;availability()">${opt('search', W.cfg.ELO_SEARCH_TAG)}</select></div>
     <div>${chk('as', 'i.as')}${chk('flows', 'i.flows')}${chk('pgadmin', 'i.pgadmin')}</div>
     <div class="muted" style="grid-column:1/-1">${t('i.legend')}</div>
   </div>
