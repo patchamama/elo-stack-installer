@@ -1198,6 +1198,24 @@ echo "ix=$(c 'http://localhost:${pt.server}/${repo}/ix?cmd=status')"; echo "as=$
   const need = { ix: true, as: prof.includes('as'), flows: prof.includes('flows') };
   return { instance: inst, ...r, need, active: r.ix && (!need.as || r.as) && (!need.flows || r.flows) };
 }
+// ELO Business Solutions: latest published version of each, from the public support RSS feed (no login needed).
+let BS_FEED = null;
+app.get('/api/bs/feed', wrap(async () => {
+  if (BS_FEED && Date.now() - BS_FEED.at < 3600e3) return BS_FEED.data;
+  const r = await fetch('https://supportweb.elo.com/de-de/feed-downloads.rss', { signal: AbortSignal.timeout(30000) });
+  if (!r.ok) throw new Error('supportweb answered HTTP ' + r.status);
+  const xml = await r.text(), tag = (s, n) => (new RegExp('<' + n + '>([\\s\\S]*?)</' + n + '>').exec(s) || [])[1]?.replace(/<!\[CDATA\[|\]\]>/g, '').trim() || '';
+  const best = new Map();
+  for (const it of xml.split('<item>').slice(1)) {
+    const title = tag(it, 'title'), link = tag(it, 'link'), m = /^(\d{2})\.(\d{2})\.(\d{4}):\s*(.+?)\s*-\s*(\S+)\s*$/.exec(title);
+    if (!m || !/\/business-solutions/.test(link)) continue;
+    let version = m[5]; if (/^0+\.0+\.0+$/.test(version)) version = (/\b(\d+\.\d+(?:\.\d+)+[a-zA-Z]?)\b/.exec(m[4]) || [])[1] || version;
+    const date = `${m[3]}-${m[2]}-${m[1]}`;
+    if (!best.has(m[4]) || best.get(m[4]).date < date) best.set(m[4], { name: m[4], version, date, link });
+  }
+  const data = { ok: true, items: [...best.values()].sort((a, b) => a.name.localeCompare(b.name)) };
+  BS_FEED = { at: Date.now(), data }; return data;
+}));
 app.get('/api/stack/health', wrap(async req => ({ ok: true, ...(await stackHealth(instOf(req.query.instance))) })));
 
 // Switch the active stack: stop the running ones, start the chosen one (background; the page polls GET /api/stack/switch).

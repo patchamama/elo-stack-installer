@@ -246,5 +246,35 @@ echo "__STEP__ Desktop ready: ${d.label}"`;
   app.post('/api/desktop/close', localOnly, wrap(async req => { const t = tunnels.get(req.body?.id); if (t) { t.proc.kill(); tunnels.delete(req.body.id); } return { ok: true }; }));
   process.on('exit', () => tunnels.forEach(t => { try { t.proc.kill(); } catch {} }));
 
+  // ── Service tunnels: every ELO port of a machine through one ssh -L, on free local ports (the same number when it is free) ──
+  const svcTunnels = new Map();
+  const portFree = p => new Promise(r => { const s = net.createServer().once('error', () => r(false)).listen(p, '127.0.0.1', () => s.close(() => r(true))); });
+  const pickPort = async (want, used) => { for (let p = want; p < want + 300 && p < 65536; p++) if (!used.has(p) && await portFree(p)) return p; return freePort(); };
+  const aliveTunnel = id => { const t = svcTunnels.get(id); return t && t.proc.exitCode === null ? t : null; };
+  app.post('/api/tunnel/open', localOnly, wrap(async req => {
+    const { id, ports } = req.body || {}, m = await resolve(id);
+    if (!m.ssh || m.container) throw new Error('a tunnel needs a Linux machine reachable by SSH');
+    const old = aliveTunnel(id); if (old) return { ok: true, map: old.map };
+    const list = [...new Set((ports || []).map(Number).filter(p => p > 0 && p < 65536))];
+    if (!list.length) throw new Error('no ports');
+    const used = new Set(), map = {}, args = ['-N', '-o', 'ExitOnForwardFailure=yes'];
+    for (const p of list) { const l = await pickPort(p, used); used.add(l); map[p] = l; args.push('-L', `127.0.0.1:${l}:127.0.0.1:${p}`); }
+    const proc = cp.spawn(SSH_EXE, [...args, ...sshArgs(m.ssh)], { windowsHide: true, stdio: 'ignore' });
+    svcTunnels.set(id, { proc, map });
+    if (!(await waitPort(map[list[0]]))) { proc.kill(); svcTunnels.delete(id); throw new Error('the SSH tunnel did not come up'); }
+    return { ok: true, map };
+  }));
+  app.post('/api/tunnel/close', localOnly, wrap(async req => { const t = svcTunnels.get(req.body?.id); if (t) { t.proc.kill(); svcTunnels.delete(req.body.id); } return { ok: true }; }));
+  app.get('/api/tunnel/list', localOnly, wrap(async () => ({ ok: true, tunnels: Object.fromEntries([...svcTunnels].filter(([, t]) => t.proc.exitCode === null).map(([id, t]) => [id, t.map])) })));
+  process.on('exit', () => svcTunnels.forEach(t => { try { t.proc.kill(); } catch {} }));
+  // Which ports of host answer from this computer (a TCP connect, 2 s).
+  app.post('/api/reach', localOnly, wrap(async req => {
+    const { host, ports } = req.body || {};
+    if (!/^[\w.:-]+$/.test(host || '')) throw new Error('bad host');
+    const res = {};
+    await Promise.all((ports || []).map(p => new Promise(r => { const c = net.connect({ host, port: Number(p), timeout: 2000 }); c.on('connect', () => { res[p] = true; c.destroy(); r(); }); c.on('error', () => { res[p] = false; r(); }); c.on('timeout', () => { res[p] = false; c.destroy(); r(); }); })));
+    return { ok: true, reach: res };
+  }));
+
   return { attach, resolve, DESKTOPS, localOnly };
 };
