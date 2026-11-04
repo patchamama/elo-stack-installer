@@ -50,6 +50,7 @@ button.btn, a.btn { display:inline-block; padding:8px 16px; border-radius:6px; b
 button:disabled { opacity:.5; cursor:default; }
 .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; } .right { margin-left:auto; }
 .check { display:grid; grid-template-columns:22px auto minmax(0,1fr); gap:10px; padding:8px 0; border-bottom:1px solid var(--border); align-items:center; }
+.check.wide { grid-template-columns:22px minmax(0,1fr); align-items:start; } .check.wide > div { min-width:0; }
 .check:last-child { border-bottom:0; } .check .v { color:var(--muted); font-size:12px; text-align:left; white-space:pre; overflow-x:auto; min-width:0; padding-bottom:2px; }
 .dot { width:12px; height:12px; border-radius:50%; display:inline-block; flex:none; } .ok { background:var(--green); } .warn { background:var(--amber); } .bad { background:var(--red); } .idle { background:var(--border); }
 .tok { color:var(--green); } .twarn { color:var(--amber); } .tbad { color:var(--red); } .muted { color:var(--muted); font-size:12px; }
@@ -599,6 +600,9 @@ async function runInstall() {
 }
 
 // ── 8 Tests ──────────────────────────────────────────────────────────────────
+// URL + administrator credentials to finish a failed browser step by hand.
+const manualHtml = m => m ? `<div style="margin-top:6px"><b>${t('s.manual')}</b> <a href="${esc(m.url)}" target="_blank" rel="noopener">${esc(m.url)} ↗</a><br>
+  ${t('m.user')}: <code>${esc(m.user)}</code> · ${t('acc.password')}: <code>${esc(m.password)}</code></div>` : '';
 async function tests() {
   $('page').innerHTML = `<h2>${t('s.title')}</h2><p class="lead">${t('s.lead')}</p><div class="explain">${t('s.explain')}</div><div class="card" id="t-out">${t('s.running')}</div>` + nav(false);
   const lines = [], showL = () => $('t-out').innerHTML = lines.map(([s, l, v]) => `<div class="check"><span class="dot ${s}"></span><div>${l}</div><div class="v">${v}</div></div>`).join('');
@@ -606,10 +610,10 @@ async function tests() {
   for (const c of st.containers || []) lines.push([c.state === 'running' || /exited \(0\)/i.test(c.status) ? 'ok' : 'bad', esc(c.name), esc(c.status)]);
   showL();
   if (W.cfg.eula) { lines.push(['idle', t('s.eula'), t('s.checking')]); showL();
-    const e = await api('/eula', {}); lines[lines.length - 1] = [e.ok ? 'ok' : 'bad', t('s.eula'), e.ok ? (e.accepted ? t('s.accepted') : t('s.already')) : esc(e.error)]; showL(); }
+    const e = await api('/eula', {}); lines[lines.length - 1] = [e.ok ? 'ok' : 'bad', t('s.eula'), e.ok ? (e.accepted ? t('s.accepted') : t('s.already')) : esc(e.error) + manualHtml(e.manual)]; showL(); }
   lines.push(['idle', t('s.web'), t('s.checking')]); showL();
   const w = await api('/webcheck', {});
-  lines[lines.length - 1] = [w.ok ? 'ok' : 'warn', t('s.web'), w.ok ? t('s.usable') : esc(w.message || w.error)]; showL();
+  lines[lines.length - 1] = [w.ok ? 'ok' : 'warn', t('s.web'), w.ok ? t('s.usable') : esc(w.message || w.error) + manualHtml(w.manual)]; showL();
   $('t-out').insertAdjacentHTML('afterend', `<div class="card" id="ix-test">${t('s.checking')}</div>`);
   await ixTest($('ix-test'));
   setNav(true);
@@ -621,8 +625,8 @@ async function ixTest(el) {
   const r = await api('/ixtest', {});
   if (!r.ok) { el.innerHTML = `<b>${t('x.title')}</b> <span class="tbad">${esc(r.error)}</span>`; return; }
   el.innerHTML = `<div class="row"><b>${t('x.title')}</b><span class="muted">${t('x.note')}</span><button class="btn small right" onclick="ixTest(this.closest('.card'))">${t('x.run')}</button></div>` +
-    r.steps.map(s => `<div class="check"><span class="dot ${s.ok ? 'ok' : 'bad'}"></span><div><b>${esc(s.name)}</b> <span class="muted">${s.ms} ms</span>
-      <div class="muted">${esc(s.summary)}</div><pre class="log" style="margin-top:6px;max-height:110px">$ ${esc(s.curl)}${s.raw && s.raw !== s.summary ? '\n' + esc(s.raw.slice(0, 600)) : ''}</pre></div><div></div></div>`).join('');
+    r.steps.map(s => `<div class="check wide"><span class="dot ${s.ok ? 'ok' : 'bad'}"></span><div><b>${esc(s.name)}</b> <span class="muted">${s.ms} ms</span>
+      <div class="muted">${esc(s.summary)}</div><pre class="log" style="margin-top:6px;max-height:110px">$ ${esc(s.curl)}${s.raw && s.raw !== s.summary ? '\n' + esc(s.raw.slice(0, 600)) : ''}</pre></div></div>`).join('');
 }
 
 // ── 9 Access ─────────────────────────────────────────────────────────────────
@@ -1120,7 +1124,8 @@ async function renderCacheCard() {
   const i = await api('/images');
   if (!i.ok) { el.innerHTML = `<b>${t('cch.title')}</b> <span class="tbad">${esc(i.error)}</span>`; return; }
   const total = i.backups.reduce((a, b) => a + (b.size || 0), 0);
-  el.innerHTML = `<div class="row"><b>${t('cch.title')}</b><span class="muted">${i.backups.length} · ${gb(total)}</span>
+  const wasOpen = el.querySelector('details')?.open;
+  el.innerHTML = `<details ${wasOpen ? 'open' : ''}><summary style="cursor:pointer"><b>${t('cch.title')}</b> <span class="muted">${i.backups.length} · ${gb(total)}</span></summary><div class="row" style="margin-top:8px">
       ${refreshBtn('renderCacheCard()')}<button class="btn small" onclick="admOpenCache()">📂 ${t('k.openCache')}</button>
       ${i.backups.length ? `<button class="btn small danger" onclick="cacheDelete(${esc(JSON.stringify(i.backups.map(b => b.file)))})">${t('cch.deleteAll')}</button>` : ''}</div>
     <span id="adm-cache-msg" class="muted"></span>
@@ -1128,7 +1133,7 @@ async function renderCacheCard() {
     ${i.backups.map(b => `<tr><td><span class="dot ok"></span> ${esc(b.ref)}</td><td>${gb(b.size)}</td><td>${esc(b.date)}</td>
       <td class="row"><button class="btn small" onclick="loadTar('${esc(b.file)}')">${t('k.load')}</button>
       <button class="btn small danger" onclick="cacheDelete(['${esc(b.file)}'])">${t('m.delete')}</button></td></tr>`).join('')}</table></div>` : `<p class="muted">${t('m.none')}</p>`}
-    <div id="k-job"></div>`;
+    <div id="k-job"></div></details>`;
 }
 async function admOpenCache() { const m = $('adm-cache-msg'); m.textContent = t('m.opening'); const r = await api('/open', { what: 'cache' }); m.textContent = r.ok ? (r.path || r.linuxPath) + (r.note ? ' — ' + r.note : '') : r.error; }
 async function cacheDelete(files) {

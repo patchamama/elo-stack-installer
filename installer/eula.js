@@ -15,8 +15,8 @@ async function launchBrowser() {
     if (!/Executable doesn't exist|playwright install/i.test(e.message)) throw e;
     for (const channel of ['msedge', 'chrome']) { try { return await chromium.launch({ channel }); } catch {} }
     installing ||= new Promise((res, rej) => {
-      let cli; try { cli = require.resolve('playwright/cli.js'); } catch { return rej(e); }
-      require('child_process').execFile(process.execPath, [cli, 'install', 'chromium'], { timeout: 600000 }, err => err ? rej(new Error('Could not download Chromium for the browser tests: ' + err.message)) : res());
+      let cli; try { cli = require('path').join(require('path').dirname(require.resolve('playwright/package.json')), 'cli.js'); } catch { return rej(e); }
+      require('child_process').execFile(process.execPath, [cli, 'install', 'chromium'], { timeout: 600000 }, err => err ? rej(new Error('Could not download Chromium for the browser tests (run "npx playwright install chromium" in the installer folder): ' + err.message)) : res());
     });
     await installing;
     return chromium.launch();

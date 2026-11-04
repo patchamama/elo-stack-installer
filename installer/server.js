@@ -352,7 +352,7 @@ app.post('/api/install', wrap(async req => {
   const inst = INST_RE.test(c.instance || '') ? c.instance : 'elo';
   const v23 = /^v(2[0-3])-/.test(c.ELO_TAG || '');
   // ELO 23 and older: elo.sh takes the ELO_23*.txt license; ELO 25: the uploaded license or the private key.
-  const lic = v23 ? '' : fs.existsSync(path.join(ELO, 'elo-license.lic')) ? 'elo-license.lic'
+  const lic = v23 ? (fs.readdirSync(ELO).some(f => /^ELO_23.*\.txt$/.test(f)) ? '' : fs.existsSync(path.join(ELO, 'elo-license.lic')) ? 'elo-license.lic' : '') : fs.existsSync(path.join(ELO, 'elo-license.lic')) ? 'elo-license.lic'
     : fs.existsSync(path.join(ELO, 'uploaded-license.pk')) ? 'uploaded-license.pk' : '';
   const env = Object.fromEntries(SETTINGS.map(k => [k, c[k]]));
   if (lic) env.LICENSE_FILE = lic;
@@ -470,14 +470,18 @@ app.get('/api/jobs/:id/stream', (req, res) => {
 });
 
 // ── Post-install: EULA and Web Client ───────────────────────────────────────
-app.post('/api/eula', wrap(async () => {
-  const e = await readEnv(); if (!e) throw new Error('not installed');
-  return acceptEula({ base: await baseUrl(e), repo: e.REPO, user: e.AUTH_ADMIN_USERNAME || 'Administrator', pass: e.AUTH_ADMIN_PASSWORD });
-}));
-app.post('/api/webcheck', wrap(async () => {
-  const e = await readEnv(); if (!e) throw new Error('not installed');
-  return webClientCheck({ base: await baseUrl(e), repo: e.REPO, user: e.AUTH_ADMIN_USERNAME || 'Administrator', pass: e.AUTH_ADMIN_PASSWORD });
-}));
+// On failure the answer carries what is needed to do the step by hand in a browser: URL and administrator credentials.
+const manualAccess = (e, tail) => ({ url: `http://localhost:${portsOf(e).server}/${e.REPO}/plugin/de.elo.ix.plugin.proxy/${tail}`,
+  user: e.AUTH_ADMIN_USERNAME || 'Administrator', password: e.AUTH_ADMIN_PASSWORD });
+app.post('/api/eula', async (_req, res) => {
+  let e; try { e = await readEnv(); if (!e) throw new Error('not installed'); res.json(await acceptEula({ base: await baseUrl(e), repo: e.REPO, user: e.AUTH_ADMIN_USERNAME || 'Administrator', pass: e.AUTH_ADMIN_PASSWORD })); }
+  catch (err) { res.json({ ok: false, error: err.message, manual: e ? manualAccess(e, 'ac/') : undefined }); }
+});
+app.post('/api/webcheck', async (_req, res) => {
+  let e; try { e = await readEnv(); if (!e) throw new Error('not installed'); const r = await webClientCheck({ base: await baseUrl(e), repo: e.REPO, user: e.AUTH_ADMIN_USERNAME || 'Administrator', pass: e.AUTH_ADMIN_PASSWORD });
+    res.json(r.ok ? r : { ...r, manual: manualAccess(e, 'web/') }); }
+  catch (err) { res.json({ ok: false, error: err.message, manual: e ? manualAccess(e, 'web/') : undefined }); }
+});
 
 // ── ELO IX API test with curl (JSON API: /<repo>/rest/IXServicePortIF/<method>, session via cookie) ──
 app.post('/api/ixtest', wrap(async () => {

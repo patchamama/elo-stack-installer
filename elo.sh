@@ -37,7 +37,7 @@ license_file() {
   if [ -n "${LICENSE_FILE:-}" ]; then echo "$LICENSE_FILE"; return; fi
   local tag=${ELO_TAG:-$(grep -s '^ELO_TAG=' "$ENVF" | cut -d= -f2)}
   # ELO 23 (and older) use their license text (ELO_23*.txt); ELO 25 the private key (*.pk) or a license file
-  case "$tag" in v23*|v21*|v20*) ls -t ELO_23*.txt 2>/dev/null | head -1; return ;; esac
+  case "$tag" in v23*|v21*|v20*) local l; l=$(ls -t ELO_23*.txt 2>/dev/null | head -1); [ -z "$l" ] && [ -f elo-license.lic ] && l=elo-license.lic; echo "$l"; return ;; esac
   [ -f elo-license.lic ] && { echo elo-license.lic; return; }
   ls -t ELO_25*.pk 2>/dev/null | head -1
 }
@@ -46,7 +46,7 @@ make_env() {
   LIC=$(license_file)
   # NO_LICENSE=1: only the compose configuration is needed (image cache before the license is uploaded)
   if [ -z "${NO_LICENSE:-}" ]; then
-    [ -n "$LIC" ] && [ -f "$LIC" ] || { echo "ERROR: no license: put elo-license.lic or the ELO .pk into $(pwd)"; exit 1; }
+    [ -n "$LIC" ] && [ -f "$LIC" ] || { echo "ERROR: no license: put elo-license.lic (ELO 23: also ELO_23*.txt) or the ELO .pk (ELO 25) into $(pwd)"; exit 1; }
   fi
   if [ ! -f "$ENVF" ] || [ "${1:-}" = --force ]; then
     local svc=${AUTH_SERVICE_PASSWORD:-$(rnd)} repo=${REPO:-repository}
