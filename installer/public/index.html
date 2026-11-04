@@ -365,9 +365,30 @@ async function requirements() {
   const r = await api('/checks'); W.checks = r;
   if (!r.ok) { $('checks').innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
   $('checks').innerHTML = r.items.map(c => `<div class="check"><span class="dot ${c.ok ? (c.warn ? 'warn' : 'ok') : 'bad'}"></span>
-    <div>${esc(c.label)}${!c.ok && c.fix === 'install' ? ` <button class="btn small" onclick="installDocker()">${t('r.installDocker')}</button>` : ''}${!c.ok && c.fix === 'start' ? ` <button class="btn small primary" onclick="reqStart('start-docker')">${t('r.startDocker')}</button>` : ''}${!c.ok && c.fix === 'start-wsl' ? ` <button class="btn small primary" onclick="reqStart('start-wsl')">${t('r.startWsl')}</button>` : ''}</div><div class="v">${esc(c.value)}</div></div>`).join('') +
+    <div>${esc(c.label)}${!c.ok && c.fix === 'install' ? ` <button class="btn small" onclick="installDocker()">${t('r.installDocker')}</button>` : ''}${!c.ok && c.fix === 'start' ? ` <button class="btn small primary" onclick="reqStart('start-docker')">${t('r.startDocker')}</button>` : ''}${c.id === 'memory' && c.warn ? ` <button class="btn small primary" onclick="memFreePanel()">${t('r.freeMem')}</button>` : ''}${!c.ok && c.fix === 'start-wsl' ? ` <button class="btn small primary" onclick="reqStart('start-wsl')">${t('r.startWsl')}</button>` : ''}</div><div class="v">${esc(c.value)}</div></div>`).join('') +
     `<div id="dockerjob"></div>${r.installed ? `<p class="muted">${t('r.existing', { state: r.running ? t('r.running') : t('r.stopped') })}</p>` : ''}`;
   setNav(!r.items.some(c => !c.ok && ['linux', 'docker', 'compose', 'disk'].includes(c.id)));
+}
+// Low memory in the Linux side: stop containers, release the cache or restart WSL / Docker.
+function memFreePanel() {
+  const wsl = W.isWindows && W.target !== 'server';
+  $('dockerjob').innerHTML = `<div class="card" style="margin-top:10px"><b>${t('r.freeMem')}</b><p class="muted" style="margin:4px 0 8px">${t('r.freeNote')}</p>
+    <div class="row"><button class="btn small" onclick="memFree('stop-containers')">${t('r.freeCtr')}</button>
+      <button class="btn small" onclick="memFree('drop-cache')">${t('r.freeCache')}</button>
+      <button class="btn small danger" onclick="memFree('restart')">${wsl ? t('r.restartWsl') : t('r.restartDocker')}</button></div><div id="memfree-out" class="muted" style="margin-top:8px"></div></div>`;
+}
+async function memFree(action) {
+  const out = $('memfree-out');
+  if (action !== 'drop-cache' && !confirm(t(action === 'restart' ? 'r.confirmRestart' : 'r.confirmStop'))) return;
+  out.textContent = t('m.working');
+  let r;
+  if (action === 'restart') {
+    if (W.isWindows && W.target !== 'server') { r = await api('/wsl', { action: 'shutdown' }); if (r.ok) r = await api('/wsl', { action: 'start' }); if (r.ok) r = await api('/engine', { action: 'start-docker' }); }
+    else { r = await api('/engine', { action: 'stop-docker' }); if (r.ok) r = await api('/engine', { action: 'start-docker' }); }
+  } else r = await api('/memory/free', { action });
+  if (!r.ok) { out.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
+  CACHE.status = null; CACHE.hostmem = null; await requirements();
+  $('dockerjob').innerHTML = `<span class="tok">${esc(r.out || 'OK')}</span>`;
 }
 // Start what is installed but stopped (Docker daemon / WSL) and check again.
 async function reqStart(what) {
@@ -393,7 +414,7 @@ function registry() {
     <div><label>${t('g.pass')}</label><input type="password" id="r-pass" autocomplete="current-password"></div>
     <div style="align-self:end"><button class="btn primary" onclick="regLogin()">${t('g.signin')}</button> <span id="r-msg"></span></div>
   </div>
-  ` + nav(!!W.inv || W.checks?.loggedIn);
+  ` + nav(!!W.inv);
   localCard();
   vaultGet('reg-user').then(v => { if (v && !$('r-user').value) $('r-user').value = v; });
   vaultGet('reg-secret').then(v => { if (v && !$('r-secret').value) $('r-secret').value = v; });
@@ -644,9 +665,9 @@ function accessHtml(st) {
   if (st.envMissing) return `<div class="card"><b>${t('a.creds')}</b><p class="tbad" style="margin:6px 0">${t('a.noenv')}</p>
     <div class="row"><input id="cr-user" placeholder="${t('m.user')}" value="Administrator"><input id="cr-pw" type="password" placeholder="${t('a.pw')}"><input id="cr-repo" placeholder="repository" value="repository">
     <button class="btn small primary" onclick="saveCreds()">${t('a.save')}</button></div></div>`;
-  return `<div class="card"><b>${t('a.services')}</b><table>${Object.entries(st.urls || {}).map(([k, u]) => `<tr><td>${esc(k)}</td><td><a target="_blank" href="${esc(u)}">${esc(u)}</a></td></tr>`).join('')}</table>
+  return `<div class="card"><b>${t('a.services')}</b> <span class="muted">· ${t('stk.of')} <b>${esc(st.instance || 'elo')}</b></span><table>${Object.entries(st.urls || {}).map(([k, u]) => `<tr><td>${esc(k)}</td><td><a target="_blank" href="${esc(u)}">${esc(u)}</a></td></tr>`).join('')}</table>
     <p class="muted">${t('a.remote')}</p></div>
-  <div class="card"><div class="row"><b>${t('a.creds')}</b><button class="btn small right" onclick="togglePw(this)">${t('a.show')}</button></div>
+  <div class="card"><div class="row"><b>${t('a.creds')}</b><span class="muted">· ${t('stk.of')} <b>${esc(st.instance || 'elo')}</b></span><button class="btn small right" onclick="togglePw(this)">${t('a.show')}</button></div>
     <table>${Object.entries(st.credentials || {}).map(([k, [u, p]]) => `<tr><td>${esc(k)}</td><td>${esc(u)}</td><td class="pw secret" data-v="${esc(p)}">••••••••</td></tr>`).join('')}</table></div>`;
 }
 
@@ -1048,11 +1069,13 @@ async function renderStack() {
   if (!r.ok) { el.innerHTML = `<b>${t('stk.title')}</b> <span class="tbad">${esc(r.error)}</span>`; return; }
   STK.scope = r.scope || 'local';
   el.innerHTML = `<div class="row"><b>${t('stk.title')}</b>
-      <select id="stk-sel" onchange="stkAddons()">${r.instances.map(i => `<option value="${esc(i.name)}" ${i.name === r.current ? 'selected' : ''}>${esc(i.name)} · ELO ${esc(i.tag || '?')} · ${i.running}/${i.total}${i.noenv ? ' · ' + t('stk.noenv') : ''}${i.name === r.current ? ' ★' : ''}</option>`).join('')}</select>
+      <select id="stk-sel" onchange="stkAddons(); if (!$('stk-creds').hidden) stkCreds(true)">${r.instances.map(i => `<option value="${esc(i.name)}" ${i.name === r.current ? 'selected' : ''}>${esc(i.name)} · ELO ${esc(i.tag || '?')} · ${i.running}/${i.total}${i.noenv ? ' · ' + t('stk.noenv') : ''}${i.name === r.current ? ' ★' : ''}</option>`).join('')}</select>
       <button class="btn small primary" onclick="stkSwitch()">${t('stk.activate')}</button>
       ${refreshBtn('renderStack()')}
       <button class="btn small" onclick="stkRecover()" title="${esc(t('stk.recoverHint'))}">${t('stk.recover')}</button>
+      <button class="btn small" onclick="stkCreds()">${t('stk.showCreds')}</button>
       <button class="btn small danger" onclick="stkDelete()">${t('stk.delete')}</button></div>
+    <div id="stk-creds" style="margin-top:8px" hidden></div>
     <div id="stk-msg" class="muted" style="margin-top:8px">${STK.last || t('stk.note')}</div><div id="stk-addons" class="muted" style="margin-top:8px"></div>`;
   stkAddons();
   const s = await api('/stack/switch');   // a switch started before a page reload keeps counting
@@ -1067,6 +1090,25 @@ async function stkAddons() {
   if (!r.ok) { el.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
   const ixl = r.ix ? `<div><b>IX</b> ${esc(r.ix.version)} <span class="muted">· ${esc(r.ix.instance || '')} · ${esc(r.ix.database || '')} · ${esc(r.ix.license || '')}</span></div>` : '';
   el.innerHTML = ixl + `<b>${t('adn.title')}</b> ` + r.addons.map(a => `<span class="row" style="gap:5px;margin:2px 12px 2px 0;display:inline-flex" title="${esc(a.evidence.join('\n'))}"><span class="dot ${a.found ? 'ok' : 'idle'}"></span>${esc(a.name)}${a.versions?.length ? ` <span class="muted">${esc(a.versions.join(', '))}</span>` : ''}</span>`).join('') + ` <span class="muted">(${t(r.packagesApi ? 'adn.packages' : 'adn.heuristic')})</span>`;
+}
+// Credentials of the stack selected in the list (not only the active one); can be saved as JSON.
+async function stkCreds(keepOpen) {
+  const el = $('stk-creds'), sel = $('stk-sel'); if (!el || !sel) return;
+  if (!keepOpen && !el.hidden) { el.hidden = true; return; }
+  const r = await api('/stack/credentials?instance=' + encodeURIComponent(sel.value));
+  el.hidden = false;
+  if (!r.ok) { el.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
+  if (r.noenv) { el.innerHTML = `<span class="twarn">${t('a.noenv')}</span>`; return; }
+  STK.creds = r;
+  el.innerHTML = `<div class="row"><b>${t('a.creds')}</b><span class="muted">· ${esc(r.instance)} · ELO ${esc(r.tag || '?')} · ${esc(r.repo || '')}</span>
+      <button class="btn small right" onclick="stkCredsJson()">⬇ ${t('stk.downloadJson')}</button></div>
+    <table>${Object.entries(r.credentials).map(([k, [u, p]]) => `<tr><td>${esc(k)}</td><td>${esc(u)}</td><td><code>${esc(p || '')}</code></td></tr>`).join('')}</table>`;
+}
+function stkCredsJson() {
+  const r = STK.creds; if (!r) return;
+  const data = { instance: r.instance, repository: r.repo, eloTag: r.tag, ports: r.ports, credentials: Object.fromEntries(Object.entries(r.credentials).map(([k, [u, p]]) => [k, { user: u, password: p }])) };
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+  a.download = `elo-credentials-${r.instance}.json`; a.click(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
 }
 async function stkSwitch() {
   const name = $('stk-sel').value;
@@ -1256,7 +1298,7 @@ async function refreshEnv() { const e = await api('/target'); $('envinfo').textC
   if (VIEW === 'install' && W.step === 0) welcome();
 })();
 // Spinner on every button whose action is asynchronous.
-for (const n of ["instAction","svc","engine","optional","stkSwitch","stkDelete","stkRecover","stkAddons","memWslOff","wslAction","instUse","reqStart","expose","ctr","rmImage","cacheDelete","elCheck","elAddons","elPrepare","elApply","elSaveCreds","instDeleteGo","vmMemApply","ixTest","saveCreds","regLogin","useLocal","openDir","admOpenCache","openCache","instViewer","deskOpen","showAccess","lastRun","instOpen","saveSources","checkSources","testSsh","admLicense","renderAdmin","renderInstallations","renderHostMem","renderStack","renderCacheCard","renderEngine","instOtherPorts","logs","stkSwitch"]) if (typeof window[n] === 'function') window[n] = spinWrap(window[n]);
+for (const n of ["stkCreds","memFree","instAction","svc","engine","optional","stkSwitch","stkDelete","stkRecover","stkAddons","memWslOff","wslAction","instUse","reqStart","expose","ctr","rmImage","cacheDelete","elCheck","elAddons","elPrepare","elApply","elSaveCreds","instDeleteGo","vmMemApply","ixTest","saveCreds","regLogin","useLocal","openDir","admOpenCache","openCache","instViewer","deskOpen","showAccess","lastRun","instOpen","saveSources","checkSources","testSsh","admLicense","renderAdmin","renderInstallations","renderHostMem","renderStack","renderCacheCard","renderEngine","instOtherPorts","logs","stkSwitch"]) if (typeof window[n] === 'function') window[n] = spinWrap(window[n]);
 </script>
 </body>
 </html>

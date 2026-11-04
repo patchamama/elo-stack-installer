@@ -92,6 +92,21 @@ async function readEnv(name = curInstance()) {
 const CREDS_FILE = path.join(x.RUN_DIR, 'elo-installer-creds.json');
 const readCreds = () => { try { return JSON.parse(fs.readFileSync(CREDS_FILE, 'utf8')); } catch { return {}; } };
 const savedCreds = name => { const c = readCreds()[name]; return c?.AUTH_ADMIN_PASSWORD ? c : null; };
+// Credentials of an installation, from its env: [user, password] per component.
+const credsOf = e => ({
+  'ELO administrator': [e.AUTH_ADMIN_USERNAME || 'Administrator', e.AUTH_ADMIN_PASSWORD],
+  'ELO service user': [e.AUTH_SERVICE_USERNAME || 'ELO Service', e.AUTH_SERVICE_PASSWORD],
+  'Database (PostgreSQL)': [e.DATABASE_USERNAME || 'elodb', e.DATABASE_PASSWORD],
+  'Tomcat manager': ['admin', e.AUTH_TOMCAT_PASSWORD],
+  'Karaf (flows worker)': ['karaf', e.AUTH_KARAF_PASSWORD],
+  'Keystore': ['', e.KEYSTORE_PASSWORD],
+});
+app.get('/api/stack/credentials', wrap(async req => {
+  const inst = instOf(req.query.instance), e = await readEnv(inst);
+  if (!e) return { ok: true, instance: inst, noenv: true, credentials: {} };
+  const pt = portsOf(e);
+  return { ok: true, instance: inst, repo: e.REPO, tag: e.ELO_TAG, ports: pt, credentials: credsOf(e) };
+}));
 app.post('/api/credentials', wrap(async req => {
   const { user, password, repo } = req.body || {};
   if (!password) throw new Error('password required');
@@ -559,14 +574,8 @@ echo "__MEM__"; free -b | awk '/Mem/ {print $2, $3, $7}'; echo "__DOCKER__"; sys
     javaClient: e ? { ixUrl: `${base}/${repo}/ix`, user: e.AUTH_ADMIN_USERNAME || 'Administrator',
       note: 'ELO Java Client: add a profile with this IX URL (download the client from the ELO partner portal; on Linux see the OpS letter "Installing ELO on Ubuntu").' } : null,
     // Shown in the local admin panel only.
-    credentials: e ? {
-      'ELO administrator': [e.AUTH_ADMIN_USERNAME || 'Administrator', e.AUTH_ADMIN_PASSWORD],
-      'ELO service user': [e.AUTH_SERVICE_USERNAME || 'ELO Service', e.AUTH_SERVICE_PASSWORD],
-      'Database (PostgreSQL)': [e.DATABASE_USERNAME || 'elodb', e.DATABASE_PASSWORD],
-      'Tomcat manager': ['admin', e.AUTH_TOMCAT_PASSWORD],
-      'Karaf (flows worker)': ['karaf', e.AUTH_KARAF_PASSWORD],
-      'Keystore': ['', e.KEYSTORE_PASSWORD],
-    } : {},
+    instance: curInstance(),
+    credentials: e ? credsOf(e) : {},
     settings: e ? Object.fromEntries(['ELO_TAG', 'ELO_SEARCH_TAG', 'REPO', 'REPO_LANGUAGE', 'ELO_DISPLAY_NAME', 'ELO_LICENSE_TYPE', 'COMPOSE_PROFILES', 'IX_URL_PUBLIC'].map(k => [k, e[k]])) : {},
   };
 }));
@@ -581,6 +590,13 @@ app.post('/api/service', wrap(async req => {
 
 app.get('/api/logs/:svc', wrap(async req => ({ ok: true, out: await elo(`logs ${req.params.svc.replace(/[^a-z0-9-]/g, '')} 300`, {}, 120) })));
 
+// Free memory of the Linux side: stop Docker containers, release the page cache.
+app.post('/api/memory/free', wrap(async req => {
+  const a = req.body?.action;
+  if (a === 'stop-containers') return { ok: true, out: await x.sh('n=$(docker ps -q | wc -l); [ "$n" = 0 ] || docker stop $(docker ps -q) >/dev/null; echo "stopped $n container(s)"', 300) };
+  if (a === 'drop-cache') return { ok: true, out: await x.sh('sync; (echo 3 > /proc/sys/vm/drop_caches) 2>/dev/null || sudo -n sh -c "echo 3 > /proc/sys/vm/drop_caches" 2>/dev/null; echo "page cache released"; free -m | sed -n 2p', 60) };
+  throw new Error('bad action');
+}));
 app.post('/api/engine', wrap(async req => {
   const { action } = req.body || {};
   if (action === 'stop-stack') return { ok: true, out: await elo('down', {}, 300) };
