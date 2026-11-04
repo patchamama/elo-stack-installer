@@ -1,4 +1,5 @@
 node_modules/
+installer/browsers/
 
 # Local secrets, licenses and generated data (never commit)
 .env
