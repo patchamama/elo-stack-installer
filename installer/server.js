@@ -396,11 +396,28 @@ for i in $(seq 1 80); do
   echo "__CHECK__ {\\"ix\\":\\"$ix\\",\\"web\\":\\"$web\\",\\"setup\\":\\"$setup\\",\\"t\\":$((i*15))}"
   case "$setup" in exited/0) [ "$ix" = 200 ] && break ;; exited/*) echo "ix-setup failed:"; docker logs --tail 30 $ELO_INSTANCE-ix-setup; exit 1 ;; esac
 done
+# The wait ended: either the setup finished and the IX answers, or the time (20 min) ran out.
+if [ "$ix" != 200 ] || [ "$setup" != exited/0 ]; then
+  echo "ERROR: the repository setup did not finish in 20 minutes (ix=$ix, ix-setup=$setup). Last lines of ix-setup:"; docker logs --tail 30 $ELO_INSTANCE-ix-setup 2>&1; exit 1
+fi
 for i in $(seq 1 30); do
   search=$(curl -sk --max-time 8 -u "$AUTH_SERVICE_USERNAME:$AUTH_SERVICE_PASSWORD" https://localhost:\${PORT_SEARCH:-9200}/_cluster/health | sed -n 's/.*"status":"\\([a-z]*\\)".*/\\1/p') || true
   [ -n "$search" ] && break; sleep 10
 done
 echo "__CHECK__ {\\"search\\":\\"\${search:-down}\\"}"
+# Automation Services and Flows (when enabled) are awaited too: up to 5 min, ready when they answer with anything below 500.
+PROF=$(ev COMPOSE_PROFILES); PORT_AS=$(ev PORT_AS); PORT_FLOWS=$(ev PORT_FLOWS)
+for svc in as flows; do
+  case ",$PROF," in *",$svc,"*) ;; *) continue ;; esac
+  if [ "$svc" = as ]; then port=\${PORT_AS:-9060}; else port=\${PORT_FLOWS:-9010}; fi
+  code=000
+  for i in $(seq 1 30); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "http://localhost:$port/") || true
+    [ "$code" != 000 ] && [ "$code" -lt 500 ] 2>/dev/null && break; sleep 10
+  done
+  echo "__CHECK__ {\\"$svc\\":\\"$code\\"}"
+  [ "$code" != 000 ] && [ "$code" -lt 500 ] 2>/dev/null || echo "WARNING: $svc did not answer on port $port"
+done
 }
 set +e; (main) 2>&1 | tee -a "$LAST"; rc=\${PIPESTATUS[0]}
 { step "Checking the result of every service"; bash $E diagnose; } 2>&1 | tee -a "$LAST" > /tmp/elo-diag.$$
