@@ -29,7 +29,7 @@ INST=${ELO_INSTANCE:-elo}
 case "$INST" in elo|elo[a-z0-9]*) ;; *) echo "ERROR: instance name must start with 'elo' (letters/digits)"; exit 2 ;; esac
 if [ "$INST" = elo ]; then ENVF=.env; else ENVF=instances/$INST/.env; mkdir -p "instances/$INST"; fi
 export ELO_INSTANCE=$INST COMPOSE_PROJECT_NAME=$INST COMPOSE_ENV_FILES=$ENVF
-rnd() { tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16; }
+rnd() { tr -dc 'A-Za-z0-9' </dev/urandom 2>/dev/null | head -c 16 2>/dev/null; true; }
 
 # License: LICENSE_FILE, elo-license.lic, or the ELO private key (*.pk; ELO then fetches the license from
 # license.services.elo.cloud / license.elo.com, which must be reachable).

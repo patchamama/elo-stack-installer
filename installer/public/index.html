@@ -163,12 +163,17 @@ function shell() {
   $('themebtn').textContent = t('theme.' + themeState());
   $('tabs').innerHTML = TABS.map(n => `<button class="${VIEW === n ? 'on' : ''}" onclick="show('${n}')">${t('tab.' + n)}</button>`).join('');
 }
+const SHOWN = {};
 function show(v, rerender) {
   VIEW = v; shell();
   for (const n of TABS) $(n + '-view').hidden = v !== n;
-  if (v === 'install') render();
-  if (v === 'admin') renderAdmin(rerender ? false : !CACHE.status);
-  if (v === 'containers') renderContainers(!CACHE.containers);
+  // Each tab keeps its content (and running jobs) while another one is shown; it is only built the first time,
+  // after a language change, or when its cached data was invalidated.
+  if (rerender) for (const k of Object.keys(SHOWN)) delete SHOWN[k];
+  const first = !SHOWN[v]; SHOWN[v] = true;
+  if (v === 'install' && first) render();
+  if (v === 'admin' && (first || !CACHE.status)) renderAdmin(rerender ? false : !CACHE.status);
+  if (v === 'containers' && (first || !CACHE.containers)) renderContainers(!CACHE.containers);
   if (v === 'help') renderHelp();
 }
 
@@ -191,6 +196,7 @@ function nav(canNext = true, label) {
 }
 const setNav = (ok, label) => { const n = $('page').querySelector('.nav'); if (n) n.outerHTML = nav(ok, label); };
 function render() {
+  SHOWN.install = true;
   $('steps').innerHTML = STEPS.map(([k], i) => `<div class="${i === W.step ? 'on' : ''} ${W.done.has(i) ? 'done' : ''}" onclick="go(${i})"><span class="n">${W.done.has(i) ? '✓' : i + 1}</span>${t(k)}</div>`).join('');
   STEPS[W.step][1]();
   // Collapsed "terminal commands" panel at the end of every step (added once; steps replace #page content).
@@ -445,7 +451,8 @@ function images() {
     <div>${chk('as', 'i.as')}${chk('flows', 'i.flows')}${chk('pgadmin', 'i.pgadmin')}</div>
     <div class="muted" style="grid-column:1/-1">${t('i.legend')}</div>
   </div>
-  <div class="card"><div class="row"><b>${t('i.avail')}</b><button class="btn small right" onclick="saveCache()">${t('i.saveCache')}</button></div>
+  <div class="card"><div class="row"><b>${t('i.avail')}</b><button class="btn small" onclick="openCache('cache','avail-cache-msg')" title="${esc(t('k.openCache'))}">📂 ${t('k.openCache')}</button><button class="btn small right" onclick="saveCache()">${t('i.saveCache')}</button></div>
+    <div id="avail-cache-msg" class="muted"></div>
     <div id="avail" style="margin-top:8px"></div><div id="cache-job"></div></div>
   <div class="card"><b>${t('i.all')}</b> <span class="muted">(${W.inv.repos.length})</span>
     <div class="tablewrap"><table><tr><th>${t('i.image')}</th><th>${t('i.latest')}</th><th>${t('i.size')}</th><th>${t('i.updated')}</th><th>${t('i.base')}</th><th>${t('i.pulls')}</th><th></th></tr>
@@ -1201,7 +1208,7 @@ async function checkSources() {
   o.textContent = r.ok ? r.lines.join('\n') : r.error;
   $('src-msg').textContent = r.ok ? t('src.result', { found: r.found, total: r.total }) : '';
 }
-async function openCache(what) { $('cache-msg').textContent = t('m.opening'); const r = await api('/open', { what }); $('cache-msg').textContent = r.ok ? (r.path || r.linuxPath) + (r.note ? ' — ' + r.note : '') : r.error; }
+async function openCache(what, mid = 'cache-msg') { $(mid).textContent = t('m.opening'); const r = await api('/open', { what }); $(mid).textContent = r.ok ? (r.path || r.linuxPath) + (r.note ? ' — ' + r.note : '') : r.error; }
 const kOut = txt => { const o = $('k-out'); if (o) { o.hidden = false; o.textContent = txt; } };
 async function ctr(action, name) { kOut(t('m.working')); const r = await api('/container', { action, name }); kOut(r.ok ? r.out : r.error); CACHE.status = null; renderContainers(true); }
 async function rmImage(ref) { const r = await api('/images/remove', { refs: [ref] }); kOut(r.ok ? r.out : r.error); renderContainers(true); }
