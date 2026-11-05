@@ -1383,7 +1383,7 @@ require('./elolinks')({ app, wrap, terminals, localOnly: terminals.localOnly });
 const server = require('http').createServer(app);
 server.on('listening', () => {
   console.log(`ELO installer: http://localhost:${PORT}${PORT !== WANTED_PORT ? ` (port ${WANTED_PORT} was busy)` : ''}`);
-  if (process.env.ELO_OPEN_BROWSER) { const u = `http://localhost:${PORT}`; try { require('child_process').exec(process.platform === 'win32' ? `start "" ${u}` : `xdg-open ${u}`).on('error', () => {}); } catch {} }
+  if (process.env.ELO_OPEN_BROWSER) { const u = `http://localhost:${PORT}`; try { require('child_process').exec(process.platform === 'win32' ? `start "" ${u}` : `xdg-open ${u}`, { windowsHide: true }).on('error', () => {}); } catch {} }
 });
 server.on('error', e => {
   if (e.code === 'EADDRINUSE' && PORT < WANTED_PORT + 100) { console.log(`port ${PORT} is busy, trying ${PORT + 1}`); server.listen(++PORT); } else throw e;

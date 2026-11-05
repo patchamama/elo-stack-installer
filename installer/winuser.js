@@ -13,7 +13,7 @@ function runPS(script, timeoutMs = 600000) {
   return new Promise(resolve => {
     let out = '', err = '';
     const ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command',
-      '[Console]::OutputEncoding=[Text.Encoding]::UTF8; ' + script]);
+      '[Console]::OutputEncoding=[Text.Encoding]::UTF8; ' + script], { windowsHide: true });
     const t = setTimeout(() => ps.kill(), timeoutMs);
     ps.stdout.on('data', d => out += d.toString('utf8'));
     ps.stderr.on('data', d => err += d.toString('utf8'));
@@ -31,7 +31,9 @@ async function runAsUser(script, timeoutSec = 600) {
   const r = await runPS(
     `$user=(Get-CimInstance Win32_ComputerSystem).UserName; if(-not $user){ 'ERROR:No interactive user is signed in'; exit }; ` +
     `$name='ELO-Installer-${id}'; ` +
-    `$a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "${psq(file)}"'; ` +
+    // conhost --headless (Windows 11 / 10 2004+) runs the console program with no window at all; -WindowStyle Hidden alone still flashes one.
+    `$ps='-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "${psq(file)}"'; ` +
+    `if([Environment]::OSVersion.Version.Build -ge 19041 -and (Test-Path "$env:SystemRoot\\System32\\conhost.exe")){ $a=New-ScheduledTaskAction -Execute 'conhost.exe' -Argument ('--headless powershell.exe '+$ps) } else { $a=New-ScheduledTaskAction -Execute 'powershell.exe' -Argument $ps }; ` +
     `$p=New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited; ` +
     `Register-ScheduledTask -TaskName $name -Action $a -Principal $p -Force | Out-Null; ` +
     `try { Start-ScheduledTask -TaskName $name; $dl=(Get-Date).AddSeconds(${timeoutSec}); ` +

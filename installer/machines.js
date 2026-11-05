@@ -12,7 +12,7 @@ function save(id, rec) {
   const m = all(); m[id] = { ...(m[id] || {}), ...rec, updated: new Date().toISOString() };
   fs.writeFileSync(FILE, JSON.stringify(m, null, 2));
   // Administrators + SYSTEM only (the file holds passwords).
-  if (x.IS_WIN) try { cp.execFileSync('icacls', [FILE, '/inheritance:r', '/grant:r', '*S-1-5-32-544:F', '*S-1-5-18:F'], { stdio: 'ignore' }); } catch {}
+  if (x.IS_WIN) try { cp.execFileSync('icacls', [FILE, '/inheritance:r', '/grant:r', '*S-1-5-32-544:F', '*S-1-5-18:F'], { stdio: 'ignore', windowsHide: true }); } catch {}
   else try { fs.chmodSync(FILE, 0o600); } catch {}
 }
 const get = id => all()[id] || null;
