@@ -124,6 +124,8 @@ async function vaultKey() {
   await new Promise((ok, ko) => { const tx = db.transaction('keys', 'readwrite'); tx.objectStore('keys').put(k, 'k'); tx.oncomplete = ok; tx.onerror = () => ko(tx.error); });
   return k;
 }
+// "Loading…" plus what is being loaded and where it comes from.
+const ld = k => `${t('a.loading')} <span class="muted">· ${t('ld.' + k)}</span>`;
 const b64 = u => btoa(String.fromCharCode(...u)), unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 async function vaultSet(name, text) {
   try { const k = await vaultKey(), iv = crypto.getRandomValues(new Uint8Array(12)), ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, k, new TextEncoder().encode(text)));
@@ -181,43 +183,256 @@ function syncMachineTabs(r) {
   if (cur) { const n = run.findIndex(i => i.id === cur); VIEW = n >= 0 ? 'm:' + n : 'admin'; }
   shell(); if (VIEW.startsWith('m:')) show(VIEW);
 }
-const mvPaths = { server: [['Web Client', 'plugin/de.elo.ix.plugin.proxy/web/'], ['Admin Console', 'plugin/de.elo.ix.plugin.proxy/ac/'], ['IX', 'ix?cmd=status']], as: [['Automation Services', '']], flows: [['Flows', '']], pgadmin: [['pgAdmin', '']] };
+// A machine / stack tab: resources (optional live monitor), access (terminal, RDP, desktop), ELO found in it (credentials, URLs), Business Solutions.
+const isLocalM = i => /^local:/.test(i.id) || i.id === 'local' || i.id === 'desktop';
+const termId = i => isLocalM(i) ? 'wsl' : i.id;
 async function renderMachine(n) {
   const i = MT.list[n]; if (!i) return;
   let box = $('mv-' + n);
   if (!box) { document.getElementById('machine-views').insertAdjacentHTML('beforeend', `<main id="mv-${n}" class="single"><section class="page" style="max-width:1100px"></section></main>`); box = $('mv-' + n); }
   const pg = box.querySelector('section');
-  pg.innerHTML = `<div class="row"><h2>${esc(i.name)}</h2><span class="muted">${esc(i.typeLabel || '')} · ${esc(i.detail || '')}</span>${refreshBtn('renderMachine(' + n + ')')}</div><p class="muted">${t('a.loading')}</p>`;
-  const [cr, ac, tl] = await Promise.all([i.instance ? api('/stack/credentials?instance=' + encodeURIComponent(i.instance)) : { ok: false }, api('/access?id=' + encodeURIComponent(i.id)), api('/tunnel/list')]);
-  MT.tunnels = tl.ok ? tl.tunnels : {};
-  const host = /^local:/.test(i.id) ? 'localhost' : (ac.ssh?.host || ac.windows?.ip || 'localhost');
-  const pt = cr.ok && cr.ports ? cr.ports : null, repo = cr.repo || 'repository';
-  const svc = pt ? [['server', pt.server], ['as', pt.as], ['flows', pt.flows], ['pgadmin', pt.pgadmin]] : [];
-  const reach = svc.length ? (await api('/reach', { host, ports: svc.map(s => s[1]) })).reach || {} : {};
-  const tun = MT.tunnels[i.id], blocked = svc.some(([, p]) => reach[p] === false) && !tun, canTunnel = !!ac.ssh && !i.container;
-  const urls = svc.flatMap(([k, p]) => (mvPaths[k] || []).map(([label, path]) => {
-    const lp = tun ? tun[p] : p, h = tun ? '127.0.0.1' : host, u = `http://${h}:${lp}/${k === 'server' ? repo + '/' : ''}${path}`;
-    return `<tr><td>${label}</td><td><a target="_blank" rel="noopener" href="${esc(u)}">${esc(u)}</a></td><td class="muted">${tun ? '→ ' + p : (reach[p] === false ? '✗' : '✔')}</td></tr>`; })).join('');
+  mvMonitor(n, false);
   pg.innerHTML = `<div class="row"><h2>${esc(i.name)}</h2><span class="muted">${esc(i.typeLabel || '')} · ${esc(i.detail || '')}</span>${refreshBtn('renderMachine(' + n + ')')}</div>
-    ${cr.ok && !cr.noenv ? `<div class="card"><b>${t('a.creds')}</b> <span class="muted">· ELO ${esc(cr.tag || '?')} · ${esc(cr.instance)} · ${esc(repo)}</span>
-      <table>${Object.entries(cr.credentials).map(([k, [u, p]]) => `<tr><td>${esc(k)}</td><td>${esc(u)}</td><td><code>${esc(p || '')}</code></td></tr>`).join('')}</table></div>` : ''}
-    <div class="card"><b>${t('mv.access')}</b>${ac.ok ? `<table>
-      ${ac.ssh ? `<tr><td>SSH</td><td><code>${esc(ac.ssh.command)}</code></td></tr><tr><td>${t('m.user')}</td><td>${esc(ac.ssh.user)}${ac.ssh.password ? ' · <code>' + esc(ac.ssh.password) + '</code>' : ''} <span class="muted">${esc(ac.ssh.host)}:${ac.ssh.port}</span></td></tr>` : ''}
-      ${ac.windows ? `<tr><td>Windows</td><td>${esc(ac.windows.user)} · <code>${esc(ac.windows.password || '')}</code> <span class="muted">${esc(ac.windows.ip || '')}</span></td></tr><tr><td>RDP</td><td><code>${esc(ac.windows.mstsc)}</code></td></tr>` : ''}
-      </table>` : `<p class="muted">${/^local:/.test(i.id) ? 'localhost (WSL / Docker on this computer)' : esc(ac.error || '')}</p>`}
-      <div class="row" style="margin-top:6px"><button class="btn small" onclick="openTerminal('${esc(i.id)}','${esc(i.name)}')">&gt;_ ${t(ac.windows ? 'acc.psTerm' : 'acc.term')}</button></div></div>
-    ${svc.length ? `<div class="card"><div class="row"><b>URLs</b>${tun ? `<span class="tok">${t('mv.tunnelOn')}</span><button class="btn small right" onclick="mvTunnel(${n}, false)">${t('mv.closeTunnel')}</button>`
+    <div class="card" id="mv-res-${n}"><b>${t('mv.res')}</b> <span class="muted">${ld('machine')}</span></div>
+    <div id="mv-sys-${n}"></div>
+    <div class="card" id="mv-acc-${n}"><b>${t('mv.access')}</b> <span class="muted">${ld('machine')}</span></div>
+    <div id="mv-docker-${n}"></div><div id="mv-db-${n}"></div><div id="mv-elo-${n}"></div>`;
+  mvRes(n); mvAcc(n); mvSys(n); mvDocker(n); mvElo(n);
+}
+// ── Resources ──
+const mvBar = (pct, label) => { const p = Math.max(0, Math.min(100, Math.round(pct || 0))); return `<div style="display:flex;align-items:center;gap:8px"><div style="flex:1;height:8px;border-radius:4px;background:rgba(128,128,128,.25);min-width:120px"><div style="width:${p}%;height:8px;border-radius:4px;background:${p > 85 ? '#d9534f' : p > 65 ? '#e0a030' : '#3b82f6'}"></div></div><span style="min-width:150px">${label}</span></div>`; };
+const mvMB = v => v == null || isNaN(v) ? '?' : v >= 1024 ? (v / 1024).toFixed(1) + ' GB' : Math.round(v) + ' MB';
+const mvUp = s => s == null || isNaN(s) ? '?' : s >= 86400 ? Math.floor(s / 86400) + ' d ' + Math.floor(s % 86400 / 3600) + ' h' : s >= 3600 ? Math.floor(s / 3600) + ' h ' + Math.floor(s % 3600 / 60) + ' min' : Math.floor(s / 60) + ' min';
+function mvRes(n) {
+  const i = MT.list[n], el = $('mv-res-' + n); if (!el) return;
+  const on = !!MT.mon?.[n];
+  el.innerHTML = `<div class="row"><b>${t('mv.res')}</b><span class="muted" id="mv-resnote-${n}"></span>
+      <span class="right row" style="gap:8px"><label class="row" style="gap:4px"><input type="checkbox" ${on ? 'checked' : ''} onchange="mvMonitor(${n}, this.checked)"> ${t('mv.monitor')}</label>
+      <select id="mv-int-${n}" onchange="MT.mon?.[${n}] && mvMonitor(${n}, true)">${[3, 5, 10, 30, 60].map(s => `<option value="${s}" ${s === (MT.int?.[n] || 5) ? 'selected' : ''}>${s} s</option>`).join('')}</select>
+      <button class="btn small" onclick="mvStats(${n})" title="${esc(t('m.refresh'))}">⟳</button></span></div><div id="mv-resbody-${n}" style="margin-top:8px"></div>`;
+  mvStats(n);
+}
+async function mvStats(n, quiet) {
+  const i = MT.list[n], body = $('mv-resbody-' + n); if (!i || !body) return;
+  if (!quiet) body.innerHTML = `<span class="muted">${ld('machine')}</span>`;
+  const r = await api('/machine/stats?id=' + encodeURIComponent(i.id));
+  if (!$('mv-resbody-' + n)) return;
+  if (!r.ok) { body.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
+  const v = r.vm, g = r.guest, rows = [];
+  if (v) {
+    rows.push([t('mv.state'), `${esc(v.state)} · ${v.vcpus} vCPU · ${t('mv.uptime')} ${mvUp(v.uptime)}`]);
+    rows.push([t('mv.cpuHost'), mvBar(v.cpu, v.cpu + ' %')]);
+    rows.push([t('mv.ramVm'), v.assignedMB ? mvBar(v.assignedMB ? v.demandMB / v.assignedMB * 100 : 0, `${mvMB(v.demandMB)} / ${mvMB(v.assignedMB)}`) : `${mvMB(v.startupMB)}`]);
+    if (v.diskGB) rows.push([t('mv.diskVm'), mvBar(v.diskFileGB / v.diskGB * 100, `${v.diskFileGB} / ${v.diskGB} GB`)]);
+  }
+  if (g) {
+    if (g.cpu != null) rows.push([t('mv.cpu'), mvBar(g.cpu, g.cpu + ' %')]);
+    if (g.ramTotalMB) rows.push([t('mv.ram'), mvBar((g.ramTotalMB - g.ramFreeMB) / g.ramTotalMB * 100, `${mvMB(g.ramTotalMB - g.ramFreeMB)} ${t('mv.used')} · ${mvMB(g.ramFreeMB)} ${t('mv.free')} · ${mvMB(g.ramTotalMB)}`)]);
+    for (const d of g.disks || []) rows.push([t('mv.disk') + ' ' + d.name, mvBar((d.totalGB - d.freeGB) / d.totalGB * 100, `${(d.totalGB - d.freeGB).toFixed(1)} ${t('mv.used')} · ${d.freeGB} GB ${t('mv.free')} · ${d.totalGB} GB`)]);
+    if (g.uptime != null && !v) rows.push([t('mv.uptime'), mvUp(g.uptime)]);
+  }
+  body.innerHTML = (rows.length ? `<table>${rows.map(([k, h]) => `<tr><td class="muted" style="white-space:nowrap">${k}</td><td>${h}</td></tr>`).join('')}</table>` : '')
+    + (r.guestError ? `<div class="twarn" style="margin-top:4px">${t('mv.guestErr')}: ${esc(r.guestError)}</div>` : '') + (r.vmError ? `<div class="twarn">${esc(r.vmError)}</div>` : '')
+    + (!rows.length && !r.guestError && !r.vmError ? `<span class="muted">–</span>` : '');
+  const note = $('mv-resnote-' + n); if (note) note.textContent = '· ' + new Date().toLocaleTimeString();
+}
+// Live monitoring: refresh the numbers every few seconds while this tab is the visible one.
+function mvMonitor(n, on) {
+  MT.mon = MT.mon || {}; MT.int = MT.int || {};
+  clearInterval(MT.mon[n]); delete MT.mon[n];
+  if (!on) return;
+  const sel = $('mv-int-' + n); MT.int[n] = sel ? +sel.value : (MT.int[n] || 5);
+  MT.mon[n] = setInterval(() => { if (VIEW === 'm:' + n && !document.hidden) mvStats(n, true); }, MT.int[n] * 1000);
+}
+// ── Access: terminal, RDP (Windows), desktop in the browser (Linux) ──
+async function mvAcc(n) {
+  const i = MT.list[n], el = $('mv-acc-' + n); if (!el) return;
+  const ac = isLocalM(i) ? { ok: false } : await api('/access?id=' + encodeURIComponent(i.id));
+  MT.ac = MT.ac || {}; MT.ac[n] = ac;
+  if (!$('mv-acc-' + n)) return;
+  const local = isLocalM(i), w = ac.windows, s = ac.ssh, d = ac.desktop;
+  const pw = v => v ? `<code class="secret pw" data-v="${esc(v)}">••••••••</code>` : '';
+  el.innerHTML = `<div class="row"><b>${t('mv.access')}</b><button class="btn small right" onclick="togglePw(this)">${t('a.show')}</button></div>
+    ${ac.ok ? `<table>
+      ${s ? `<tr><td class="muted">SSH</td><td><code>${esc(s.command)}</code></td></tr><tr><td class="muted">${t('m.user')}</td><td>${esc(s.user)} ${pw(s.password)} <span class="muted">${esc(s.host)}:${s.port}</span></td></tr>` : ''}
+      ${w ? `<tr><td class="muted">Windows</td><td>${esc(w.user)} ${pw(w.password)} <span class="muted">${esc(w.ip || '')}</span></td></tr><tr><td class="muted">RDP</td><td><code>${esc(w.mstsc || '')}</code></td></tr>` : ''}
+      </table>` : `<p class="muted">${local ? 'localhost (WSL / Docker on this computer)' : esc(ac.error || '')}</p>`}
+    <div class="row" style="margin-top:8px;gap:8px;flex-wrap:wrap">
+      ${ac.ok || local ? `<button class="btn small primary" onclick="openTerminal('${esc(termId(i))}','${esc(i.name)}')">&gt;_ ${t('acc.term')}</button>` : ''}
+      ${w ? `<a class="btn small" href="/api/rdp/file?id=${encodeURIComponent(i.id)}" download>⬇ ${t('mv.rdpFile')}</a>
+        <button class="btn small primary" onclick="mvRdp(${n}, 'open')">🖥 ${t('mv.rdpOpen')}</button>
+        <button class="btn small" onclick="mvRdp(${n}, 'enable')">${t('mv.rdpEnable')}</button>` : ''}
+      ${s && !local ? (d?.installed ? `<button class="btn small primary" onclick="mvDesk(${n}, 'open')">🖥 ${t('mv.deskOpen')}</button><button class="btn small" onclick="mvDesk(${n}, 'close')">${t('desk.close')}</button>`
+        : `<button class="btn small" onclick="mvDesk(${n}, 'install')">🖥 ${t('mv.deskInstall')}</button>`) : ''}
+    </div>
+    ${w ? `<p class="muted" style="margin:6px 0 0">${t('mv.rdpNote')}</p>` : ''}
+    <div id="mv-job-${n}" style="margin-top:8px"></div><div id="mv-amsg-${n}" class="muted" style="margin-top:4px"></div>`;
+}
+async function mvRdp(n, what) {
+  const i = MT.list[n], m = $('mv-amsg-' + n); m.textContent = t('m.working');
+  const r = await api('/rdp/' + what, { id: i.id });
+  m.innerHTML = r.ok ? `<span class="tok">✓ ${t(what === 'open' ? 'mv.rdpOpened' : 'mv.rdpEnabled')}</span>` : `<span class="tbad">${esc(r.error)}</span>`;
+}
+async function mvDesk(n, what) {
+  const i = MT.list[n], m = $('mv-amsg-' + n);
+  if (what === 'install') return runJob('/desktop/install', { id: i.id, desktop: 'xfce', browser: true }, $('mv-job-' + n), () => mvAcc(n));
+  if (what === 'close') { await api('/desktop/close', { id: i.id }); m.textContent = ''; return; }
+  m.textContent = t('m.working');
+  const r = await api('/desktop/open', { id: i.id });
+  if (!r.ok) { m.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
+  m.innerHTML = `<span class="tok">✓ ${t('desk.opened')}</span> <a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.url)}</a>`;
+  window.open(r.url, '_blank');
+}
+// ── ELO found in the machine ──
+const mvPaths = { server: [['Web Client', 'plugin/de.elo.ix.plugin.proxy/web/'], ['Admin Console', 'plugin/de.elo.ix.plugin.proxy/ac/'], ['IX', 'ix?cmd=status']], as: [['Automation Services', '']], flows: [['Flows', '']], pgadmin: [['pgAdmin', '']] };
+async function mvElo(n) {
+  const i = MT.list[n], el = $('mv-elo-' + n); if (!el) return;
+  el.innerHTML = `<div class="card"><b>ELO</b> <span class="muted">${ld('machine')}</span></div>`;
+  let host, insts;
+  const tl = await api('/tunnel/list'); MT.tunnels = tl.ok ? tl.tunnels : {};
+  if (i.instance) {   // a stack of this computer
+    const cr = await api('/stack/credentials?instance=' + encodeURIComponent(i.instance));
+    host = 'localhost'; insts = cr.ok && !cr.noenv ? [{ instance: cr.instance, repo: cr.repo, tag: cr.tag, ports: cr.ports, credentials: cr.credentials }] : [];
+  } else {
+    const r = await api('/machine/elo?id=' + encodeURIComponent(i.id));
+    host = r.host || ''; insts = r.ok ? r.instances : [];
+    if (r.ok && !r.found) { el.innerHTML = `<div class="card"><b>ELO</b> <span class="muted">· ${t('mv.noElo')}</span></div>`; MT.elo = MT.elo || {}; MT.elo[n] = null; return; }
+    if (!r.ok) { el.innerHTML = `<div class="card"><b>ELO</b> <span class="tbad">${esc(r.error)}</span></div>`; return; }
+    // Windows installation of ELO (no Docker stack): the web apps come from the machine's own ELO configuration.
+    if (!insts.length && /^(hyperv|vbox):/.test(i.id)) { const nat = await mvEloNative(n, host); if (nat) { el.innerHTML = nat; return; } }
+    if (!insts.length) insts = [{ instance: '', repo: 'repository', tag: '', ports: { server: 9090, as: 9060, flows: 9010, pgadmin: 5050 }, credentials: null }];
+  }
+  MT.elo = MT.elo || {}; MT.elo[n] = { host, insts };
+  const svcOf = p => [['server', p.server], ['as', p.as], ['flows', p.flows], ['pgadmin', p.pgadmin]];
+  const allPorts = [...new Set(insts.flatMap(x => svcOf(x.ports).map(s => s[1])))];
+  const reach = (await api('/reach', { host, ports: allPorts })).reach || {};
+  const tun = MT.tunnels[i.id], blocked = insts.some(x => reach[x.ports.server] === false) && !tun, canTunnel = !!(MT.ac?.[n]?.ssh || MT.ac?.[n]?.windows) && !isLocalM(i);
+  const block = x => {
+    const urls = svcOf(x.ports).filter(([, p]) => reach[p] !== false || tun).flatMap(([k, p]) => (mvPaths[k] || []).map(([label, path]) => {
+      const lp = tun ? tun[p] : p, h = tun ? '127.0.0.1' : host, u = `http://${h}:${lp}/${k === 'server' ? (x.repo || 'repository') + '/' : ''}${path}`;
+      return `<tr><td>${label}</td><td><a target="_blank" rel="noopener" href="${esc(u)}">${esc(u)}</a></td><td class="muted">${tun ? '→ ' + p : '✔'}</td><td><a class="btn small" target="_blank" rel="noopener" href="${esc(u)}">↗ ${t('mv.openTab')}</a></td></tr>`; })).join('');
+    const down = svcOf(x.ports).filter(([, p]) => reach[p] === false && !tun).map(([k, p]) => `${k}:${p}`);
+    return `<div class="card"><b>ELO</b> <span class="muted">· ${esc(x.instance || '')} ${x.tag ? '· ELO ' + esc(x.tag) : ''} ${x.repo ? '· ' + esc(x.repo) : ''}</span>
+      ${x.credentials ? `<div class="row" style="margin-top:6px"><b>${t('a.creds')}</b><button class="btn small right" onclick="togglePw(this)">${t('a.show')}</button></div>
+        <table>${Object.entries(x.credentials).map(([k, [u, p]]) => `<tr><td>${esc(k)}</td><td>${esc(u)}</td><td>${p ? `<code class="secret pw" data-v="${esc(p)}">••••••••</code>` : ''}</td></tr>`).join('')}</table>` : ''}
+      <div class="row" style="margin-top:8px"><b>URLs</b>${tun ? `<span class="tok">${t('mv.tunnelOn')}</span><button class="btn small right" onclick="mvTunnel(${n}, false)">${t('mv.closeTunnel')}</button>`
         : blocked ? `<span class="twarn">${t('mv.unreachable', { host: esc(host) })}</span>${canTunnel ? `<button class="btn small primary right" onclick="mvTunnel(${n}, true)">${t('mv.openTunnel')}</button>` : ''}` : ''}</div>
-      <div class="tablewrap"><table>${urls}</table></div><div id="mv-msg-${n}" class="muted"></div></div>` : ''}
+      ${x.credentials ? '' : `<p class="muted" style="margin:4px 0">${t('mv.noCreds')}</p>`}
+      <div class="tablewrap"><table>${urls || `<tr><td class="muted">${esc(down.join(', '))}</td></tr>`}</table></div></div>`;
+  };
+  el.innerHTML = insts.map(block).join('') + `<div id="mv-msg-${n}" class="muted"></div>
+    <div class="card"><div class="row"><b>${t('mv.bs')}</b><button class="btn small right" onclick="mvBs(${n})">${t('mv.bsLoad')}</button>
+      <button class="btn small" onclick="openJavaClient()">${t('jc.open')}</button></div><p class="muted" style="margin:4px 0">${t('mv.bsNote')}</p><div id="mv-bs-${n}"></div></div>`;
+}
+// ── System (OS, license, virtualization) and databases of a machine ──
+async function mvSys(n) {
+  const i = MT.list[n], el = $('mv-sys-' + n), dbEl = $('mv-db-' + n); if (!el) return;
+  el.innerHTML = `<div class="card"><b>${t('mv.system')}</b> <span class="muted">${ld('machine')}</span></div>`;
+  if (isLocalM(i)) {
+    const r = await api('/docker/info');
+    if (!$('mv-sys-' + n)) return;
+    if (!r.ok) { el.innerHTML = `<div class="card"><b>${t('mv.system')}</b> <span class="tbad">${esc(r.error)}</span></div>`; return; }
+    const d = r.docker;
+    el.innerHTML = `<div class="card"><b>${t('mv.system')}</b><table>
+      <tr><td class="muted">${t('mv.os')}</td><td>${esc(r.os || '?')} <span class="muted">· ${esc(r.kernel)}</span></td></tr>
+      <tr><td class="muted">${t('mv.host')}</td><td>${esc(r.host)}${r.virt ? ` <span class="muted">· ${esc(r.virt)}</span>` : ''}</td></tr>
+      ${d ? `<tr><td class="muted">Docker</td><td>${esc(d.version)} · ${esc(d.os)} · ${d.cpus} vCPU · ${mvMB(d.memBytes / 1048576)} <span class="muted">· ${d.running}/${d.containers} ${t('mv.containers')} · ${d.images} ${t('mv.images')}</span></td></tr>` : `<tr><td class="muted">Docker</td><td class="twarn">${t('mv.noDocker')}</td></tr>`}
+    </table></div>`;
+    return;
+  }
+  const r = await api('/machine/sysinfo?id=' + encodeURIComponent(i.id));
+  if (!$('mv-sys-' + n)) return;
+  if (!r.ok || !r.os) { el.innerHTML = `<div class="card"><b>${t('mv.system')}</b> <span class="${r.ok ? 'muted' : 'twarn'}">${esc(r.error || '–')}</span></div>`; return; }
+  const o = r.os, lic = r.license;
+  el.innerHTML = `<div class="card"><b>${t('mv.system')}</b><table>
+    <tr><td class="muted">${t('mv.os')}</td><td>${esc(o.name)} <span class="muted">${esc([o.version, o.build && 'build ' + o.build, o.arch, o.kernel].filter(Boolean).join(' · '))}</span></td></tr>
+    <tr><td class="muted">${t('mv.host')}</td><td>${esc(r.host || '')} <span class="muted">${esc(r.address || '')}</span></td></tr>
+    <tr><td class="muted">${t('mv.virt')}</td><td>${esc(r.virt || t('mv.physical'))}</td></tr>
+    ${lic ? `<tr><td class="muted">${t('mv.license')}</td><td><span class="${lic.ok ? 'tok' : 'twarn'}">${esc(lic.status)}</span> <span class="muted">${esc(lic.name)}</span></td></tr>` : ''}
+    ${o.installed ? `<tr><td class="muted">${t('mv.installed')}</td><td>${esc(o.installed)}${o.lang ? ` <span class="muted">· ${esc(o.lang)}</span>` : ''}</td></tr>` : ''}
+  </table></div>`;
+  const db = r.db || {}, host = r.address;
+  const row = (k, label, d) => !d?.installed ? '' : `<tr><td><b>${label}</b></td><td>${d.running ? '<span class="tok">●</span> ' + t('mv.running') : '<span class="twarn">○ ' + t('mv.stopped') + '</span>'} <span class="muted">${esc(d.service || '')}</span></td>
+      <td>${esc(host)}:${d.port} ${d.reachable ? '<span class="tok">✔</span>' : '<span class="tbad" title="' + esc(t('mv.dbUnreach')) + '">✗</span>'}</td>
+      <td>${k === 'postgres' ? `<button class="btn small primary" onclick="mvDbOpen(${n}, 'pg')">pgAdmin</button>` : `<button class="btn small primary" onclick="mvDbOpen(${n}, 'ms')">SQL Server</button>`}
+        <button class="btn small" onclick="mvDbCopy(${n}, '${k}')">${t('mv.copyConn')}</button></td></tr>`;
+  const rows = row('postgres', 'PostgreSQL', db.postgres) + row('mssql', 'SQL Server', db.mssql);
+  if (dbEl) dbEl.innerHTML = rows ? `<div class="card"><b>${t('mv.databases')}</b> <span class="muted">· ${t('mv.dbUser')}: <code>elodb</code> / <code>elodb</code></span>
+    <table>${rows}</table><div id="mv-dbmsg-${n}" class="muted" style="margin-top:4px"></div></div>` : '';
+  MT.db = MT.db || {}; MT.db[n] = { host, ...db };
+}
+async function mvDbOpen(n, kind) {
+  const d = MT.db?.[n], m = $('mv-dbmsg-' + n); m.textContent = t('m.working');
+  const r = kind === 'pg' ? await api('/db/pgadmin', { host: d.host, port: d.postgres.port, name: 'ELO ' + MT.list[n].name }) : await api('/db/mssql', { host: d.host, port: d.mssql.port });
+  m.innerHTML = r.ok ? `<span class="tok">✓ ${esc(r.note || '')}</span>${kind === 'pg' ? ` <span class="muted">${t('mv.pgNote')}</span>` : ''}` : `<span class="tbad">${esc(r.error)}</span>`;
+}
+function mvDbCopy(n, k) {
+  const d = MT.db?.[n]; if (!d) return;
+  const s = k === 'postgres' ? `postgresql://elodb:elodb@${d.host}:${d.postgres.port}/postgres` : `Server=${d.host},${d.mssql.port};User Id=elodb;Password=elodb;TrustServerCertificate=True`;
+  navigator.clipboard?.writeText(s); $('mv-dbmsg-' + n).innerHTML = `<code>${esc(s)}</code> <span class="tok">✓ ${t('mv.copied')}</span>`;
+}
+// ── Docker of the local machine: containers and ports, stop / start / remove, ELO stacks ──
+async function mvDocker(n) {
+  const i = MT.list[n], el = $('mv-docker-' + n); if (!el || !isLocalM(i)) return;
+  el.innerHTML = `<div class="card"><b>Docker</b> <span class="muted">${ld('containers')}</span></div>`;
+  const [c, s] = await Promise.all([api('/containers'), api('/instances')]);
+  if (!$('mv-docker-' + n)) return;
+  const stk = s.ok ? s.instances : [];
+  const ports = p => (p || '').split(',').map(x => x.trim()).filter(Boolean).filter(x => /->/.test(x)).map(x => { const m = /(?:[\d.:\[\]]*:)?(\d+)->(\d+)/.exec(x); return m ? `<a target="_blank" rel="noopener" href="http://localhost:${m[1]}/">${m[1]}</a>→${m[2]}` : esc(x); }).join(' ');
+  const rows = c.ok ? c.containers.map(k => `<tr><td><span class="dot ${k.state === 'running' ? 'ok' : 'idle'}"></span> ${esc(k.name)}</td><td class="muted">${esc(k.image)}</td><td>${ports(k.ports)}</td><td class="muted">${esc(k.cpu)} ${esc((k.mem || '').split('/')[0])}</td>
+      <td>${k.state === 'running' ? `<button class="btn small" onclick="mvCtr(${n}, 'stop', '${esc(k.name)}')">${t('mv.stop')}</button> <button class="btn small" onclick="mvCtr(${n}, 'restart', '${esc(k.name)}')">↻</button>` : `<button class="btn small primary" onclick="mvCtr(${n}, 'start', '${esc(k.name)}')">${t('mv.start')}</button>`}
+        <button class="btn small danger" onclick="mvCtr(${n}, 'rm', '${esc(k.name)}')" title="${esc(t('mv.remove'))}">✕</button></td></tr>`).join('') : `<tr><td class="tbad">${esc(c.error)}</td></tr>`;
+  const sRows = stk.map(k => `<tr><td><b>${esc(k.name)}</b></td><td class="muted">ELO ${esc(k.tag || '?')} · ${esc(k.repo || '')}</td><td>${k.running}/${k.total} ${t('mv.containers')}</td>
+      <td>${k.running ? `<button class="btn small" onclick="mvStack(${n}, 'stop', '${esc(k.name)}')">${t('mv.stop')}</button>` : `<button class="btn small primary" onclick="mvStack(${n}, 'start', '${esc(k.name)}')">${t('mv.start')}</button>`}</td></tr>`).join('');
+  el.innerHTML = `<div class="card"><div class="row"><b>Docker</b><span class="muted">· ${c.ok ? c.containers.filter(k => k.state === 'running').length + '/' + c.containers.length : '?'} ${t('mv.containers')}</span>
+      <span class="right row" style="gap:6px"><button class="btn small" onclick="show('containers')">${t('mv.imagesTab')}</button><button class="btn small primary" onclick="show('install')">+ ${t('mv.newStack')}</button></span></div>
+    ${sRows ? `<div style="margin-top:8px"><b>${t('stk.title')}</b></div><div class="tablewrap"><table>${sRows}</table></div>` : ''}
+    <div style="margin-top:8px"><b>${t('mv.containers')}</b></div><div class="tablewrap"><table>${rows || `<tr><td class="muted">–</td></tr>`}</table></div><div id="mv-dmsg-${n}" class="muted"></div></div>`;
+}
+async function mvCtr(n, action, name) {
+  if (action === 'rm' && !confirm(t('mv.confirmRm', { name }))) return;
+  const m = $('mv-dmsg-' + n); m.textContent = t('m.working');
+  const r = await api('/container', { action, name });
+  if (!r.ok) { m.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
+  CACHE.containers = null; await mvDocker(n);
+}
+async function mvStack(n, action, name) {
+  if (action === 'stop' && !confirm(t('mv.confirmStop', { name }))) return;
+  const m = $('mv-dmsg-' + n); m.textContent = t('m.working');
+  const r = await api('/installations/action', { id: 'local:' + name, action });
+  if (!r.ok) { m.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
+  CACHE.status = null; CACHE.inst = null; await mvDocker(n);
+  api('/installations').then(x => { CACHE.inst = x; syncMachineTabs(x); });
+}
+// ELO installed natively in Windows: its web apps (hostname replaced by the VM address) with the real HTTP answer of each.
+async function mvEloNative(n, host) {
+  const i = MT.list[n], r = await api('/elolinks/status', { id: i.id });
+  if (!r.ok || !r.items) return null;
+  const web = r.items.filter(x => x.found && x.kind === 'web' && /^https?:\/\//i.test(x.detail || ''));
+  if (!web.length) return null;
+  const tun0 = MT.tunnels?.[i.id];
+  const fix = u => { try { const U = new URL(u); const p = +U.port || (U.protocol === 'https:' ? 443 : 80); if (tun0 && tun0[p]) { U.hostname = '127.0.0.1'; U.port = tun0[p]; } else U.hostname = host; return U.href; } catch { return u; } };
+  MT.elo = MT.elo || {}; MT.elo[n] = { host, insts: [], nativePorts: [...new Set(web.map(x => { try { const U = new URL(x.detail); return +U.port || (U.protocol === 'https:' ? 443 : 80); } catch { return 0; } }).filter(Boolean))] };
+  const urls = web.map(x => fix(x.detail)), pr = (await api('/probe', { urls })).results || {};
+  const tun = tun0;
+  const rows = web.map((x, k) => { const u = urls[k], p = pr[u] || {}, good = p.status && p.status < 400 || p.status === 401 || p.status === 403;
+    return `<tr><td>${esc(x.name)}</td><td><a target="_blank" rel="noopener" href="${esc(u)}">${esc(u)}</a></td>
+      <td class="${good ? 'tok' : 'tbad'}" title="${esc(p.error || '')}">${good ? '✔' : '✗'} ${esc(p.status || p.error || '')}</td><td><a class="btn small" target="_blank" rel="noopener" href="${esc(u)}">↗ ${t('mv.openTab')}</a></td></tr>`; }).join('');
+  const bad = urls.some(u => !(pr[u]?.status));
+  const sc = r.scan || {};
+  return `<div class="card"><b>ELO</b> <span class="muted">· Windows · ${esc((sc.elo || []).join(', '))} · ${t('mv.repos')}: ${esc((sc.repos || []).join(', '))}</span>
+    <p class="muted" style="margin:4px 0">${t('mv.nativeNote')}</p>
+    <div class="row"><b>URLs</b>${bad ? `<span class="twarn">${t('mv.unreachable', { host: esc(host) })}</span><button class="btn small primary right" onclick="mvTunnel(${n}, true)">${t('mv.openTunnel')}</button>` : ''}</div>
+    <div class="tablewrap"><table>${rows}</table></div><div id="mv-msg-${n}" class="muted"></div></div>
     <div class="card"><div class="row"><b>${t('mv.bs')}</b><button class="btn small right" onclick="mvBs(${n})">${t('mv.bsLoad')}</button>
       <button class="btn small" onclick="openJavaClient()">${t('jc.open')}</button></div><p class="muted" style="margin:4px 0">${t('mv.bsNote')}</p><div id="mv-bs-${n}"></div></div>`;
 }
 async function mvTunnel(n, open) {
-  const i = MT.list[n], m = $('mv-msg-' + n);
-  const cr = i.instance ? await api('/stack/credentials?instance=' + encodeURIComponent(i.instance)) : null, pt = cr?.ports;
-  const r = open ? await api('/tunnel/open', { id: i.id, ports: pt ? [pt.server, pt.as, pt.flows, pt.pgadmin] : [9090, 9060, 9010, 5050] }) : await api('/tunnel/close', { id: i.id });
+  const i = MT.list[n], m = $('mv-msg-' + n), e = MT.elo?.[n];
+  const ports = e?.nativePorts?.length ? e.nativePorts : [...new Set((e?.insts || []).flatMap(x => [x.ports.server, x.ports.as, x.ports.flows, x.ports.pgadmin]))];
+  const r = open ? await api('/tunnel/open', { id: i.id, ports: ports.length ? ports : [9090, 9060, 9010, 5050] }) : await api('/tunnel/close', { id: i.id });
   if (!r.ok) { if (m) m.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
-  renderMachine(n);
+  mvElo(n);
 }
 async function mvBs(n) {
   const el = $('mv-bs-' + n); el.textContent = t('m.working');
@@ -468,7 +683,7 @@ function registry() {
     <div id="cli-help2" hidden style="margin-top:8px"><b>${t('cli.title')}</b>${t('cli.steps')}
         <p style="margin-top:8px"><b>${t('cli.pdf')}</b> <a href="/help/docs/en-us_consultingops-opsletter_ubuntu.pdf" target="_blank" rel="noopener">📄 English (PDF)</a> ·
           <a href="/help/docs/de-de_consultingops-opsletter_ubuntu.pdf" target="_blank" rel="noopener">📄 Deutsch (PDF)</a></p></div></div>
-  <div class="card" id="local-card"><b>${t('g.localTitle')}</b> <span class="muted">${t('a.loading')}</span></div>
+  <div class="card" id="local-card"><b>${t('g.localTitle')}</b> <span class="muted">${ld('local')}</span></div>
   <p class="muted" style="margin:0 0 8px">${t('g.or')}</p>
   <div class="card grid2">
     <div><label>${t('g.user')}</label><input type="text" id="r-user" autocomplete="username"></div>
@@ -603,7 +818,7 @@ function config() {
   $('page').innerHTML = `<h2>${t('c.title')}</h2><p class="lead">${t('c.lead')}</p><div class="explain">${t('c.explain')}</div>
   <div class="card grid2">${FIELDS.map(([k, pw]) => `<div><label>${t('c.' + k)}</label><div class="row" style="flex-wrap:nowrap">
     <input type="text" class="${pw ? 'pw' : ''}" value="${esc(W.cfg[k])}" oninput="W.cfg['${k}']=this.value">${pw ? `<button class="btn small" title="${esc(t('c.newpw'))}" onclick="W.cfg['${k}']=rnd();config()">↻</button>` : ''}</div></div>`).join('')}</div>
-  <div class="card" id="inst-cfg"><span class="muted">${t('a.loading')}</span></div>
+  <div class="card" id="inst-cfg"><span class="muted">${ld('instcfg')}</span></div>
   <div class="card"><label><input type="checkbox" ${W.cfg.fresh ? 'checked' : ''} onchange="W.cfg.fresh=this.checked"> ${t('c.fresh')}</label>
     <label><input type="checkbox" ${W.cfg.eula ? 'checked' : ''} onchange="W.cfg.eula=this.checked"> ${t('c.eula')}</label></div>` + nav(true) + cmdsPanel();
   cfgInstance();
@@ -718,7 +933,7 @@ async function ixTest(el) {
 
 // ── 9 Access ─────────────────────────────────────────────────────────────────
 async function access() {
-  $('page').innerHTML = `<h2>${t('a.title')}</h2><p class="lead">${t('a.lead')}</p><div id="acc">${t('a.loading')}</div>
+  $('page').innerHTML = `<h2>${t('a.title')}</h2><p class="lead">${t('a.lead')}</p><div id="acc">${ld('access')}</div>
     <div class="nav"><button class="btn" onclick="go(${W.step - 1})">${t('nav.back')}</button><button class="btn primary" onclick="show('admin')">${t('nav.toAdmin')}</button></div>`;
   $('acc').innerHTML = accessHtml(await loadStatus());
 }
@@ -745,7 +960,7 @@ async function loadStatus(force) {
 const memMB = v => { const s = (v || '').split('/')[0].trim(), n = parseFloat(s); return /GiB/.test(s) ? n * 1024 : /KiB/.test(s) ? n / 1024 : n || 0; };
 async function renderAdmin(reload) {
   const pg = $('admin-page');
-  if (reload || !CACHE.status) { pg.innerHTML = `<h2>${t('m.title')}</h2><p class="lead">${t('a.loading')}</p>`; await loadStatus(true); CACHE.images = null; }
+  if (reload || !CACHE.status) { pg.innerHTML = `<h2>${t('m.title')}</h2><p class="lead">${ld('status')}</p>`; await loadStatus(true); CACHE.images = null; }
   const st = CACHE.status;
   if (!st.ok) { pg.innerHTML = `<h2>${t('m.title')}</h2><span class="tbad">${esc(st.error)}</span>`; return; }
   const m = st.memory || {}, usedPct = m.total ? Math.round((m.total - m.avail) / m.total * 100) : 0;
@@ -755,10 +970,10 @@ async function renderAdmin(reload) {
   pg.innerHTML = `<div class="row"><h2>${t('m.title')}</h2><span class="muted">${t('m.updated', { time: CACHE.at.status.toLocaleTimeString() })}</span>
       <button class="btn small right" onclick="renderAdmin(true)">${t('m.refresh')}</button></div>
     <p class="lead">${t('m.lead')}</p>
-  <div class="card" id="adm-mem"><b>${t('hm.title')}</b> <span class="muted">${t('a.loading')}</span></div>
-  <div class="card" id="adm-stack"><b>${t('stk.title')}</b> <span class="muted">${t('a.loading')}</span></div>
-  <div class="card" id="adm-cache"><b>${t('cch.title')}</b> <span class="muted">${t('a.loading')}</span></div>
-  <div class="card" id="adm-inst"><b>${t('inst.title')}</b> <span class="muted">${t('a.loading')}</span></div>
+  <div class="card" id="adm-mem"><b>${t('hm.title')}</b> <span class="muted">${ld('mem')}</span></div>
+  <div class="card" id="adm-stack"><b>${t('stk.title')}</b> <span class="muted">${ld('stack')}</span></div>
+  <div class="card" id="adm-cache"><b>${t('cch.title')}</b> <span class="muted">${ld('cache')}</span></div>
+  <div class="card" id="adm-inst"><b>${t('inst.title')}</b> <span class="muted">${ld('inst')}</span></div>
   <div class="card" id="adm-wsl" hidden></div>
   <div id="adm-engine"></div>
   ${accessHtml(st)}
@@ -1269,7 +1484,7 @@ let ELO_ONLY = false;
 async function renderContainers(reload) {
   const pg = $('containers-page');
   if (reload || !CACHE.containers) {
-    pg.innerHTML = `<h2>${t('k.title')}</h2><p class="lead">${t('a.loading')}</p>`;
+    pg.innerHTML = `<h2>${t('k.title')}</h2><p class="lead">${ld('containers')}</p>`;
     const [c, i] = await Promise.all([api('/containers'), api('/images')]);
     CACHE.containers = c; CACHE.images = i; CACHE.at.containers = new Date();
   }

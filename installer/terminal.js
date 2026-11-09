@@ -77,6 +77,7 @@ echo "SSH_OK $(hostname -I | awk '{print $1}')"`, 300);
     if (rec.os === 'windows') {
       const ip = (await x.ps(`@((Get-VMNetworkAdapter -VMName '${psq(name)}').IPAddresses | ?{ $_ -match '^\\d+\\.\\d+\\.\\d+\\.\\d+$' })[0]`)).out.trim();
       return { os: 'windows', label: `${name} (${rec.label || 'Windows'})`, vm: name, user: rec.user, password: rec.password, ip, rdp: ip ? `${ip}:3389` : '',
+        winSsh: ip ? { host: ip, port: 22, user: rec.user, key: SSH_KEY } : null,
         ssh: rec.wslUser && ip ? { host: ip, port: 22, user: rec.wslUser, password: rec.password, key: SSH_KEY, note: 'Ubuntu in WSL inside the VM' } : null };
     }
     if (kind === 'hyperv') {
@@ -123,8 +124,16 @@ echo "SSH_OK $(hostname -I | awk '{print $1}')"`, 300);
       const id = new URL(req.url, 'http://x').searchParams.get('id');
       let term;
       try {
-        const m = await resolve(id), c = termCommand(m);
-        ws.send(`\x1b[90m${m.os === 'windows' && !m.container ? 'PowerShell Direct' : 'ssh'} → ${m.label}\x1b[0m\r\n`);
+        const m = await resolve(id);
+        // Windows VMs: PowerShell Direct is not a real terminal (interactive tools such as claude/codex fail with
+        // "stdin is not a terminal"), so OpenSSH of Windows (real ConPTY) is used; PowerShell Direct only as fallback.
+        let viaSsh = false;
+        if (m.os === 'windows' && !m.container && m.winSsh) {
+          ws.send('\x1b[90mPreparing OpenSSH in the VM (first time only, can take a few minutes)…\x1b[0m\r\n');
+          try { await ensureWinSsh(m); viaSsh = true; } catch (e) { ws.send(`\x1b[33mOpenSSH is not available in the VM (${e.message}); using PowerShell Direct, which is not a full terminal.\x1b[0m\r\n`); }
+        }
+        const c = viaSsh ? { file: SSH_EXE, args: ['-tt', ...sshArgs(m.winSsh)], env: {} } : termCommand(m);
+        ws.send(`\x1b[90m${m.os === 'windows' && !m.container && !viaSsh ? 'PowerShell Direct' : 'ssh'} → ${m.label}\x1b[0m\r\n`);
         term = pty.spawn(c.file, c.args, { name: 'xterm-256color', cols: 120, rows: 32, env: { ...process.env, ...c.env } });
       } catch (e) { ws.send(`\x1b[31m${e.message}\x1b[0m\r\n`); ws.close(); return; }
       term.onData(d => ws.readyState === 1 && ws.send(d));
@@ -253,7 +262,9 @@ echo "__STEP__ Desktop ready: ${d.label}"`;
   const aliveTunnel = id => { const t = svcTunnels.get(id); return t && t.proc.exitCode === null ? t : null; };
   app.post('/api/tunnel/open', localOnly, wrap(async req => {
     const { id, ports } = req.body || {}, m = await resolve(id);
-    if (!m.ssh || m.container) throw new Error('a tunnel needs a Linux machine reachable by SSH');
+    // Windows VMs: through their OpenSSH (set up on the way, like for the terminal).
+    if (!m.ssh && m.os === 'windows' && m.winSsh) { await ensureWinSsh(m); m.ssh = m.winSsh; }
+    if (!m.ssh || m.container) throw new Error('a tunnel needs a machine reachable by SSH');
     const old = aliveTunnel(id); if (old) return { ok: true, map: old.map };
     const list = [...new Set((ports || []).map(Number).filter(p => p > 0 && p < 65536))];
     if (!list.length) throw new Error('no ports');
@@ -276,5 +287,174 @@ echo "__STEP__ Desktop ready: ${d.label}"`;
     return { ok: true, reach: res };
   }));
 
-  return { attach, resolve, DESKTOPS, localOnly };
+  // ── OpenSSH inside a Windows VM (through PowerShell Direct), so the terminal is a real one ──
+  const winCred = m => `$c=New-Object PSCredential('${psq(m.user)}',(ConvertTo-SecureString '${psq(m.password)}' -AsPlainText -Force))`;
+  // PowerShell Direct breaks when several sessions open at once on the same VM: calls to one VM run one after another.
+  const vmQueue = new Map();
+  const vmLock = (name, fn) => { const run = (vmQueue.get(name) || Promise.resolve()).catch(() => {}).then(fn); vmQueue.set(name, run); return run; };
+  const inWinVm = (m, body, ms = 120000, args = '') => vmLock(m.vm, () => x.ps(`${winCred(m)}; Invoke-Command -VMName '${psq(m.vm)}' -Credential $c ${args} -ScriptBlock { ${body} }`, ms));
+  // Readable error of a failed remote PowerShell: the exception message, not the trailing "PSComputerName" line.
+  const psErr = r => {
+    const s = ((r.err || '') + '\n' + (r.out || '')).replace(/\r/g, '');
+    const lines = s.split('\n').map(l => l.trim()).filter(l => l && !/^\+/.test(l) && !/^(CategoryInfo|FullyQualifiedErrorId|PSComputerName)\b/.test(l));
+    return lines.slice(0, 3).join(' ').slice(0, 300) || s.trim().slice(0, 300) || 'failed';
+  };
+  const winSshOk = new Set();
+  async function ensureWinSsh(m) {
+    if (winSshOk.has(m.vm)) return;
+    const pub = fs.readFileSync(SSH_KEY + '.pub', 'utf8').trim();
+    const r = await inWinVm(m, `param($pub); $ErrorActionPreference='Stop'
+if(-not (Get-Service sshd -EA SilentlyContinue)){ Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0 | Out-Null }
+New-ItemProperty -Path HKLM:\\SOFTWARE\\OpenSSH -Name DefaultShell -Value "$env:SystemRoot\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -PropertyType String -Force | Out-Null
+Set-Service sshd -StartupType Automatic
+$f="$env:ProgramData\\ssh\\administrators_authorized_keys"
+if(-not (Test-Path $f) -or -not (Select-String -Path $f -SimpleMatch -Pattern $pub -Quiet)){ Add-Content -Path $f -Value $pub -Encoding ascii }
+icacls $f /inheritance:r /grant '*S-1-5-32-544:F' /grant '*S-1-5-18:F' | Out-Null
+$u="$env:USERPROFILE\\.ssh"; New-Item -ItemType Directory -Force $u | Out-Null; $uf="$u\\authorized_keys"
+if(-not (Test-Path $uf) -or -not (Select-String -Path $uf -SimpleMatch -Pattern $pub -Quiet)){ Add-Content -Path $uf -Value $pub -Encoding ascii }
+if(-not (Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -EA SilentlyContinue)){ New-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -DisplayName 'OpenSSH Server' -Enabled True -Direction Inbound -Protocol TCP -Action Allow -LocalPort 22 | Out-Null }
+Restart-Service sshd; 'SSH_READY'`, 1800000, `-ArgumentList '${psq(pub)}'`);
+    if (!/SSH_READY/.test(r.out)) throw new Error(psErr(r));
+    winSshOk.add(m.vm);
+  }
+
+  // ── RDP: .rdp file, open in the system's mstsc with the stored credentials, enable RDP in the VM ──
+  const rdpOf = async id => { const m = await resolve(id); if (m.os !== 'windows') throw new Error('RDP is for Windows machines'); if (!m.ip) throw new Error('the VM has no IP yet (is it running?)'); return m; };
+  app.get('/api/rdp/file', localOnly, async (req, res) => {
+    try {
+      const m = await rdpOf(req.query.id);
+      res.set({ 'Content-Type': 'application/x-rdp', 'Content-Disposition': `attachment; filename="${String(m.vm).replace(/[^\w.-]/g, '_')}.rdp"` });
+      res.send(['full address:s:' + m.ip + ':3389', 'username:s:' + m.user, 'prompt for credentials:i:0', 'authentication level:i:2', 'screen mode id:i:2', 'desktopwidth:i:1600', 'desktopheight:i:900', 'session bpp:i:32', 'redirectclipboard:i:1', 'compression:i:1', ''].join('\r\n'));
+    } catch (e) { res.status(400).send(e.message); }
+  });
+  app.post('/api/rdp/open', localOnly, wrap(async req => {
+    const m = await rdpOf(req.body?.id);
+    // The credentials go to the Windows Credential Manager of the signed-in user, so mstsc connects without asking.
+    const cmd = `& cmdkey.exe '/generic:TERMSRV/${psq(m.ip)}' '/user:${psq(m.user)}' '/pass:${psq(m.password)}' | Out-Null; Start-Process mstsc.exe -ArgumentList '/v:${psq(m.ip)}'`;
+    await x.detect();
+    if (x.getMode() === 'wsl-user') await x.getSeatLib().runAsUser(cmd, 60); else await x.ps(cmd);
+    return { ok: true, opened: m.ip };
+  }));
+  app.post('/api/rdp/enable', localOnly, wrap(async req => {
+    const m = await resolve(req.body?.id); if (m.os !== 'windows') throw new Error('RDP is for Windows machines');
+    const r = await inWinVm(m, `$ErrorActionPreference='Stop'; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' fDenyTSConnections 0
+netsh advfirewall firewall set rule group="@FirewallAPI.dll,-28752" new enable=Yes | Out-Null; Set-Service TermService -StartupType Automatic; Start-Service TermService -EA SilentlyContinue; 'RDP_ON'`, 120000);
+    if (!/RDP_ON/.test(r.out)) throw new Error(psErr(r));
+    return { ok: true };
+  }));
+
+  // ── System of a machine: OS, license, hypervisor, installed databases (PostgreSQL / SQL Server) ──
+  const tcpOpen = (host, port) => new Promise(r => { const c = net.connect({ host, port, timeout: 2000 }); c.on('connect', () => { c.destroy(); r(true); }); c.on('error', () => r(false)); c.on('timeout', () => { c.destroy(); r(false); }); });
+  const LIC = ['Unlicensed', 'Licensed', 'Initial grace period', 'Additional grace period', 'Non-genuine grace period', 'Notification', 'Extended grace period'];
+  const LINUX_INFO = `. /etc/os-release 2>/dev/null; echo "__OS__ $PRETTY_NAME"; echo "__VER__ $VERSION_ID"; echo "__KERNEL__ $(uname -r) $(uname -m)"; echo "__HOST__ $(hostname)"; echo "__VIRT__ $(systemd-detect-virt 2>/dev/null)"
+systemctl list-units --type=service --all --no-legend 2>/dev/null | awk '{print $1" "$3}' | grep -iE '^(postgres|mssql|mysql|mariadb|docker)' | sed 's/^/__SVC__ /'
+echo "__LISTEN__ $(ss -ltn 2>/dev/null | awk 'NR>1{n=split($4,a,":"); print a[n]}' | sort -un | tr '\\n' ' ')"`;
+  function dbFrom(services, listen) {
+    const find = re => services.find(s => re.test(s.name) || re.test(s.display || ''));
+    const pg = find(/postgres/i), ms = find(/^MSSQL|^mssql-server|SQL Server \(/i);
+    const mk = (s, port) => ({ installed: !!s || listen.includes(port), running: s ? /^(running|active)$/i.test(s.status) : listen.includes(port), service: s?.display || s?.name || '', port });
+    return { postgres: mk(pg, 5432), mssql: mk(ms, 1433) };
+  }
+  app.get('/api/machine/sysinfo', localOnly, wrap(async req => {
+    const id = String(req.query.id || ''), out = { ok: true, id };
+    out.virt = /^hyperv:/.test(id) ? 'Hyper-V' : /^vbox:/.test(id) ? 'VirtualBox' : '';
+    const m = await resolve(id);
+    out.address = m.ip || m.ssh?.host || '';
+    if (m.os === 'windows') {
+      const r = await inWinVm(m, `$o=Get-CimInstance Win32_OperatingSystem; $cs=Get-CimInstance Win32_ComputerSystem
+$lic=Get-CimInstance SoftwareLicensingProduct -Filter "ApplicationId='55c92734-d682-4d71-983e-d6ec3f16059f' AND PartialProductKey IS NOT NULL" | Select-Object -First 1
+$svc=@(Get-Service | ?{ $_.Name -match '^(postgresql|MSSQL)' -or $_.DisplayName -match 'PostgreSQL|SQL Server \\(' } | %{ [pscustomobject]@{ name=$_.Name; display=$_.DisplayName; status="$($_.Status)" } })
+$listen=@(Get-NetTCPConnection -State Listen -EA SilentlyContinue | %{ [int]$_.LocalPort } | Sort-Object -Unique)
+[pscustomobject]@{ host=$cs.Name; os=$o.Caption; version=$o.Version; build=$o.BuildNumber; arch=$o.OSArchitecture; model=$cs.Model; installed=$o.InstallDate.ToString('yyyy-MM-dd'); lang=($o.MUILanguages -join ','); licName=$lic.Name; licStatus=$lic.LicenseStatus; services=$svc; listen=$listen } | ConvertTo-Json -Compress -Depth 5`, 90000);
+      const j = r.out.split('\n').map(s => s.trim()).filter(s => s.startsWith('{')).pop();
+      if (!j) throw new Error(psErr(r));
+      const d = JSON.parse(j), svcs = [].concat(d.services || []), listen = [].concat(d.listen || []);
+      if (!out.virt) out.virt = /virtual machine/i.test(d.model || '') ? 'Hyper-V' : /virtualbox/i.test(d.model || '') ? 'VirtualBox' : '';
+      Object.assign(out, { host: d.host, os: { name: d.os, version: d.version, build: d.build, arch: d.arch, installed: d.installed, lang: d.lang }, license: { status: LIC[d.licStatus] ?? (d.licStatus == null ? 'unknown' : String(d.licStatus)), ok: d.licStatus === 1, name: d.licName || '' }, listen, db: dbFrom(svcs.map(s => ({ ...s })), listen) });
+    } else if (m.ssh) {
+      const t = await x.shOn(m.ssh, LINUX_INFO, 40), g = k => (new RegExp('__' + k + '__ (.*)').exec(t) || [])[1]?.trim() || '';
+      const svcs = [...t.matchAll(/__SVC__ (\S+) (\S+)/g)].map(s => ({ name: s[1], display: s[1], status: s[2] })), listen = g('LISTEN').split(/\s+/).filter(Boolean).map(Number);
+      Object.assign(out, { host: g('HOST'), os: { name: g('OS'), version: g('VER'), kernel: g('KERNEL') }, listen, services: svcs, db: dbFrom(svcs, listen) });
+      if (!out.virt && g('VIRT') && g('VIRT') !== 'none') out.virt = g('VIRT');
+    }
+    // can this computer reach the database ports of the machine?
+    if (out.db && out.address) await Promise.all(Object.values(out.db).filter(d => d.installed).map(async d => { d.reachable = await tcpOpen(out.address, d.port); }));
+    return out;
+  }));
+  // Local database clients: pgAdmin 4 (preloaded with the server, password from a pgpass file) / SQL Server tools.
+  const PGA = 'C:\\Program Files\\pgAdmin 4';
+  const SSMS = () => { for (const d of ['C:\\Program Files (x86)\\Microsoft SQL Server Management Studio 20', 'C:\\Program Files (x86)\\Microsoft SQL Server Management Studio 19', 'C:\\Program Files (x86)\\Microsoft SQL Server Management Studio 18', 'C:\\Program Files\\Microsoft SQL Server Management Studio 21']) { const f = path.join(d, 'Common7\\IDE\\Ssms.exe'); if (fs.existsSync(f)) return f; }
+    const ads = process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs\\Azure Data Studio\\azuredatastudio.exe'); return ads && fs.existsSync(ads) ? ads : ''; };
+  app.get('/api/db/clients', localOnly, wrap(async () => ({ ok: true, pgadmin: x.IS_WIN && fs.existsSync(path.join(PGA, 'runtime\\pgAdmin4.exe')), mssql: x.IS_WIN ? SSMS() : '' })));
+  app.post('/api/db/pgadmin', localOnly, wrap(async req => {
+    const { name, host, port = 5432, user = 'elodb', password = 'elodb', db = 'postgres' } = req.body || {};
+    if (!/^[\w.:-]+$/.test(host || '')) throw new Error('bad host');
+    const exe = path.join(PGA, 'runtime\\pgAdmin4.exe'), py = path.join(PGA, 'python\\python.exe'), setup = path.join(PGA, 'web\\setup.py');
+    if (!x.IS_WIN || !fs.existsSync(exe)) throw new Error('pgAdmin 4 is not installed on this computer (winget install PostgreSQL.pgAdmin)');
+    const pass = path.join(x.RUN_DIR, 'elo-pgpass.conf');   // pgAdmin reads the password from here (PassFile)
+    fs.writeFileSync(pass, `${host}:${port}:*:${user}:${password}\n`);
+    const js = path.join(x.RUN_DIR, `elo-pgadmin-${Date.now().toString(36)}.json`);
+    fs.writeFileSync(js, JSON.stringify({ Servers: { 1: { Name: name || `ELO ${host}`, Group: 'ELO', Host: host, Port: +port, MaintenanceDB: db, Username: user, SSLMode: 'prefer', PassFile: pass } } }));
+    const r = await x.run(py, [setup, 'load-servers', js], { env: { Path: `${path.join(PGA, 'runtime')};${process.env.Path || process.env.PATH}` }, timeoutMs: 90000 });
+    try { fs.unlinkSync(js); } catch {}
+    if (!/Added \d+ Server|Servers? added|Loaded/i.test(r.out + r.err) && r.code !== 0) throw new Error('could not preload the server in pgAdmin: ' + (r.err || r.out).trim().split('\n').pop());
+    const cmd = `Start-Process '${psq(exe)}'`;
+    await x.detect();
+    if (x.getMode() === 'wsl-user') await x.getSeatLib().runAsUser(cmd, 60); else await x.ps(cmd);
+    return { ok: true, note: 'pgAdmin 4' };
+  }));
+  app.post('/api/db/mssql', localOnly, wrap(async req => {
+    const { host, port = 1433, user = 'elodb' } = req.body || {};
+    if (!/^[\w.:-]+$/.test(host || '')) throw new Error('bad host');
+    const exe = x.IS_WIN ? SSMS() : '';
+    if (!exe) throw new Error('No SQL Server client on this computer. Install one: winget install Microsoft.SQLServerManagementStudio (or Azure Data Studio). Connection: ' + `${host},${port} · ${user}`);
+    const args = /azuredatastudio/i.test(exe) ? '' : `-S '${psq(host + ',' + port)}' -U '${psq(user)}'`;
+    const cmd = `Start-Process '${psq(exe)}'${args ? ` -ArgumentList "${args.replace(/"/g, '`"')}"` : ''}`;
+    await x.detect();
+    if (x.getMode() === 'wsl-user') await x.getSeatLib().runAsUser(cmd, 60); else await x.ps(cmd);
+    return { ok: true, note: path.basename(exe) };
+  }));
+
+  // ── Resources of a machine: RAM, disks, CPU (VM side from Hyper-V, guest side from inside the machine) ──
+  const STATS_SH = `echo "__MEM__ $(free -m | awk '/^Mem:/{print $2" "$7}')"
+echo "__CPU__ $(top -bn2 -d0.4 2>/dev/null | grep -i '^%\\?cpu' | tail -1)"
+df -P -BM 2>/dev/null | awk 'NR>1 && $1 ~ /^\\/dev\\// && $6 !~ /^\\/(mnt\\/wsl|usr\\/lib\\/wsl)/ && !s[$1]++ {print "__DISK__ "$6" "$2" "$4}'
+echo "__UP__ $(cut -d. -f1 /proc/uptime)"`;
+  function parseLinuxStats(out) {
+    const g = { disks: [] }; let m;
+    if ((m = /__MEM__ (\d+) (\d+)/.exec(out))) { g.ramTotalMB = +m[1]; g.ramFreeMB = +m[2]; }
+    if ((m = /__CPU__ .*?(\d+[.,]?\d*)\s*(?:%?\s*)id/i.exec(out))) g.cpu = Math.round(100 - parseFloat(m[1].replace(',', '.')));
+    for (const d of out.matchAll(/__DISK__ (\S+) (\d+)M (\d+)M/g)) g.disks.push({ name: d[1], totalGB: +(d[2] / 1024).toFixed(1), freeGB: +(d[3] / 1024).toFixed(1) });
+    if ((m = /__UP__ (\d+)/.exec(out))) g.uptime = +m[1];
+    return g;
+  }
+  app.get('/api/machine/stats', localOnly, wrap(async req => {
+    const id = String(req.query.id || ''), res = { ok: true, id };
+    if (/^local:/.test(id) || id === 'local' || id === 'desktop') { res.guest = parseLinuxStats(await x.sh(STATS_SH, 60)); return res; }
+    const hv = /^hyperv:(.+)$/.exec(id);
+    const tasks = [];
+    if (hv) tasks.push(x.ps(`try { $v=Get-VM -Name '${psq(hv[1])}' -EA Stop; $d=@(Get-VMHardDiskDrive -VM $v | ?{ $_.Path -and (Test-Path $_.Path) } | %{ Get-VHD $_.Path -EA SilentlyContinue }); $sz=($d | Measure-Object Size -Sum).Sum; $fs=($d | Measure-Object FileSize -Sum).Sum
+"$($v.State)|$($v.ProcessorCount)|$($v.CPUUsage)|$([int]($v.MemoryAssigned/1MB))|$([int]($v.MemoryDemand/1MB))|$([int]($v.MemoryStartup/1MB))|$([int]$v.Uptime.TotalSeconds)|$sz|$fs" } catch { 'ERR|' + $_.Exception.Message }`, 60000).then(r => {
+      const p = r.out.trim().split('\n').pop().split('|');
+      if (p[0] === 'ERR') { res.vmError = p[1]; return; }
+      res.vm = { state: p[0], vcpus: +p[1], cpu: +p[2], assignedMB: +p[3], demandMB: +p[4], startupMB: +p[5], uptime: +p[6], diskGB: p[7] ? +(p[7] / 1073741824).toFixed(1) : null, diskFileGB: p[8] ? +(p[8] / 1073741824).toFixed(1) : null };
+    }));
+    tasks.push((async () => {
+      const m = await resolve(id).catch(e => { res.guestError = e.message; return null; }); if (!m) return;
+      try {
+        if (m.os === 'windows') {
+          const r = await inWinVm(m, `$o=Get-CimInstance Win32_OperatingSystem; [pscustomobject]@{ ramTotalMB=[int]($o.TotalVisibleMemorySize/1024); ramFreeMB=[int]($o.FreePhysicalMemory/1024); cpu=[int](Get-CimInstance Win32_Processor | Measure-Object LoadPercentage -Average).Average; uptime=[int]((Get-Date)-$o.LastBootUpTime).TotalSeconds; disks=@(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | %{ [pscustomobject]@{ name=$_.DeviceID; totalGB=[math]::Round($_.Size/1GB,1); freeGB=[math]::Round($_.FreeSpace/1GB,1) } }) } | ConvertTo-Json -Compress -Depth 4`, 60000);
+          const j = r.out.split('\n').map(s => s.trim()).filter(s => s.startsWith('{')).pop();
+          if (!j) throw new Error(psErr(r));
+          res.guest = JSON.parse(j);
+        } else if (m.ssh) res.guest = parseLinuxStats(await x.shOn(m.ssh, STATS_SH, 40));
+      } catch (e) { res.guestError = e.message; }
+    })());
+    await Promise.all(tasks);
+    return res;
+  }));
+
+  // Bash script as root in the WSL of a Windows VM, over the VM's OpenSSH (set up the first time its terminal is opened).
+  const winWslSh = (m, script, ms = 40000) => x.run(SSH_EXE, [...sshArgs(m.winSsh, ['-o', 'BatchMode=yes', '-o', 'ConnectTimeout=5']), 'wsl.exe -u root -- bash -s'], { input: script.replace(/\r/g, ''), timeoutMs: ms }).then(r => r.out);
+  return { attach, resolve, DESKTOPS, localOnly, winCred, inWinVm, winWslSh, vmLock };
 };

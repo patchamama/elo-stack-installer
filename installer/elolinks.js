@@ -116,14 +116,14 @@ module.exports = function register({ app, wrap, terminals, localOnly }) {
     try {
       let out;
       if (kind === 'hyperv') {
-        out = await new Promise((res, rej) => {
+        out = await terminals.vmLock(m.vm || name, () => new Promise((res, rej) => {
           const p = cp.spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `$body=[IO.File]::ReadAllText('${file.replace(/'/g, "''")}'); ` +
             `$ErrorActionPreference='Stop'; $c=New-Object PSCredential($env:HVC_USER,(ConvertTo-SecureString $env:HVC_PW -AsPlainText -Force)); ` +
             `Invoke-Command -VMName '${name.replace(/'/g, "''")}' -Credential $c -ArgumentList $env:HVC_IN,$body -ScriptBlock { param($i,$b) $env:HVC_IN=$i; & ([scriptblock]::Create($b)) }`],
             { env: { ...process.env, HVC_USER: m.user, HVC_PW: m.password, HVC_IN: env.HVC_IN || '' }, windowsHide: true });
           let o = '', e = ''; p.stdout.on('data', d => o += d); p.stderr.on('data', d => e += d);
           p.on('close', code => code === 0 ? res(o) : rej(new Error((e || o).trim().split('\n').slice(0, 3).join(' '))));
-        });
+        }));
       } else {   // VirtualBox guest control (needs Guest Additions and a user with a password)
         const ps = fs.readFileSync(file, 'utf8');
         const enc = Buffer.from(`$env:HVC_IN='${(env.HVC_IN || '').replace(/'/g, "''")}'\n` + ps, 'utf16le').toString('base64');

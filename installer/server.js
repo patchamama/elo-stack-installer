@@ -783,6 +783,15 @@ app.get('/api/containers', wrap(async () => {
     networks: c.Networks, mem: stats[c.Names]?.MemUsage || '', cpu: stats[c.Names]?.CPUPerc || '', elo: /^elo[a-z0-9]*-/.test(c.Names),
   })) };
 }));
+// Docker engine of the Linux side: operating system, kernel, version, resources, image count.
+app.get('/api/docker/info', wrap(async () => {
+  const out = await x.sh(`. /etc/os-release 2>/dev/null; echo "__OS__ $PRETTY_NAME"; echo "__KERNEL__ $(uname -r) $(uname -m)"; echo "__HOST__ $(hostname)"
+echo "__DOCKER__ $(docker info --format '{{.ServerVersion}}|{{.OperatingSystem}}|{{.NCPU}}|{{.MemTotal}}|{{.Containers}}|{{.ContainersRunning}}|{{.Images}}|{{.Driver}}' 2>/dev/null)"
+echo "__VIRT__ $(systemd-detect-virt 2>/dev/null)"`, 60);
+  const g = k => (new RegExp('__' + k + '__ (.*)').exec(out) || [])[1]?.trim() || '';
+  const [ver, dos, ncpu, mem, ctr, run, img, drv] = g('DOCKER').split('|');
+  return { ok: true, os: g('OS'), kernel: g('KERNEL'), host: g('HOST'), virt: g('VIRT') === 'none' ? '' : g('VIRT'), docker: ver ? { version: ver, os: dos, cpus: +ncpu, memBytes: +mem, containers: +ctr, running: +run, images: +img, driver: drv } : null };
+}));
 app.post('/api/container', wrap(async req => {
   const { action, name } = req.body || {};
   if (!['start', 'stop', 'restart', 'rm'].includes(action) || !/^[\w.-]+$/.test(name || '')) throw new Error('bad request');
@@ -1377,6 +1386,42 @@ app.use('/vendor/xterm-fit', express.static(path.join(__dirname, 'node_modules/@
 const terminals = require('./terminal')({ app, wrap, SSH_KEY, VM_DIR: prov.VM_DIR });
 
 require('./elolinks')({ app, wrap, terminals, localOnly: terminals.localOnly });
+
+// HTTP status of URLs as seen from this computer (self-signed certificates accepted): tells "answers" from "404 / refused".
+app.post('/api/probe', terminals.localOnly, wrap(async req => {
+  const urls = (req.body?.urls || []).slice(0, 30), out = {};
+  await Promise.all(urls.map(u => new Promise(done => {
+    let U; try { U = new URL(u); } catch { out[u] = { error: 'bad url' }; return done(); }
+    if (!/^https?:$/.test(U.protocol)) { out[u] = { error: 'bad url' }; return done(); }
+    const r = require(U.protocol === 'https:' ? 'https' : 'http').request(U, { method: 'GET', timeout: 6000, rejectUnauthorized: false }, res => { out[u] = { status: res.statusCode }; res.destroy(); done(); });
+    r.on('timeout', () => { out[u] = { error: 'timeout' }; r.destroy(); done(); }); r.on('error', e => { out[u] = { error: e.code || e.message }; done(); }); r.end();
+  })));
+  return { ok: true, results: out };
+}));
+// ELO inside another machine (VM, server): .env files found over SSH (stacks, credentials, ports) and which ELO ports answer.
+const tcpUp = (host, port) => new Promise(r => { const c = require('net').connect({ host, port, timeout: 2000 }); c.on('connect', () => { c.destroy(); r(true); }); c.on('error', () => r(false)); c.on('timeout', () => { c.destroy(); r(false); }); });
+app.get('/api/machine/elo', terminals.localOnly, wrap(async req => {
+  const id = String(req.query.id || ''), out = { ok: true, id, found: false, instances: [], reach: {} };
+  let m = null; try { m = await terminals.resolve(id); } catch (e) { out.note = e.message; }
+  const host = m?.ssh?.host || m?.ip || String(req.query.host || '');
+  out.host = host;
+  const findScript = `for f in $( (ls ${x.REMOTE_DIR}/.env ${x.REMOTE_DIR}/instances/*/.env; find /opt /root /home /srv -maxdepth 4 -name .env -path '*elo*') 2>/dev/null | sort -u); do grep -qE '^(ELO_TAG|AUTH_ADMIN_PASSWORD)=' "$f" && { echo "__ENV__ $f"; cat "$f"; echo; }; done`;
+  const canWinSsh = m?.os === 'windows' && m.winSsh && !m.ssh && await tcpUp(m.winSsh.host, 22);
+  if ((m?.ssh && !m.container) || canWinSsh) {
+    try {
+      const txt = canWinSsh ? await terminals.winWslSh(m, findScript) : await x.shOn(m.ssh, findScript, 40);
+      for (const part of txt.split('__ENV__ ').slice(1)) {
+        const nl = part.indexOf('\n'), file = part.slice(0, nl).trim(), e = parseEnv(part.slice(nl + 1));
+        const inst = /\/instances\/([^/]+)\/\.env$/.exec(file)?.[1] || 'elo';
+        out.instances.push({ instance: inst, file, repo: e.REPO, tag: e.ELO_TAG, ports: portsOf(e), credentials: credsOf(e) });
+      }
+    } catch (e) { out.note = e.message; }
+  }
+  const ports = [...new Set([9090, ...out.instances.map(i => i.ports.server)])];
+  if (host) await Promise.all(ports.map(async p => { out.reach[p] = await tcpUp(host, p); }));
+  out.found = out.instances.length > 0 || Object.values(out.reach).some(Boolean);
+  return out;
+}));
 
 // If the port is taken (another installer, another program) the next free one is used; the page is served by this
 // backend, so the frontend always talks to the port it was loaded from.
