@@ -343,6 +343,46 @@ netsh advfirewall firewall set rule group="@FirewallAPI.dll,-28752" new enable=Y
     return { ok: true };
   }));
 
+  // ── RDP in the browser: Apache Guacamole (guacd + web app) in Docker, one connection per Windows machine ──
+  // File-based users (no database): user-mapping.xml in a volume, regenerated from RUN_DIR/guac-conns.json. Published on 127.0.0.1 only.
+  const GUAC_FILE = path.join(x.RUN_DIR, 'guac-conns.json');
+  const guacLoad = () => { try { return JSON.parse(fs.readFileSync(GUAC_FILE, 'utf8')); } catch { return { user: 'elo', password: rnd() + rnd(), conns: {} }; } };
+  const xmlEsc = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  app.post('/api/rdp/web', localOnly, wrap(async req => {
+    const m = await rdpOf(req.body?.id), id = req.body.id;
+    const g = guacLoad(); g.conns[id] = { name: m.vm, ip: m.ip, user: m.user, password: m.password };
+    fs.writeFileSync(GUAC_FILE, JSON.stringify(g, null, 2));
+    try { if (x.IS_WIN) cp.execFileSync('icacls', [GUAC_FILE, '/inheritance:r', '/grant:r', '*S-1-5-32-544:F', '*S-1-5-18:F', `${process.env.USERNAME}:F`], { stdio: 'ignore', windowsHide: true }); } catch {}
+    const xml = `<user-mapping><authorize username="${xmlEsc(g.user)}" password="${xmlEsc(g.password)}">\n` + Object.values(g.conns).map(c =>
+      `<connection name="${xmlEsc(c.name)}"><protocol>rdp</protocol><param name="hostname">${xmlEsc(c.ip)}</param><param name="port">3389</param><param name="username">${xmlEsc(c.user)}</param><param name="password">${xmlEsc(c.password)}</param><param name="security">any</param><param name="ignore-cert">true</param><param name="resize-method">display-update</param><param name="enable-wallpaper">false</param></connection>`).join('\n') + '\n</authorize></user-mapping>\n';
+    const b64 = Buffer.from(xml).toString('base64');
+    let port = +(((await x.sh(`docker port elo-guacamole 8080/tcp 2>/dev/null | head -1`, 30)).match(/:(\d+)\s*$/m) || [])[1]) || 0;
+    const fresh = !port;
+    if (fresh) port = await pickPort(8085, new Set());
+    const out = await x.sh(`set -e
+echo ${b64} | base64 -d | docker run --rm -i -v elo-guac-home:/g alpine sh -c 'cat > /g/user-mapping.xml'
+docker network inspect elo-guac2 >/dev/null 2>&1 || { docker rm -f elo-guacd elo-guacamole >/dev/null 2>&1; docker network rm elo-guac >/dev/null 2>&1; docker network create --subnet 10.253.77.0/24 elo-guac2 >/dev/null; }
+docker inspect elo-guacd >/dev/null 2>&1 || docker run -d --name elo-guacd --network elo-guac2 --restart unless-stopped guacamole/guacd >/dev/null
+docker inspect elo-guacamole >/dev/null 2>&1 || docker run -d --name elo-guacamole --network elo-guac2 --restart unless-stopped -p 127.0.0.1:${port}:8080 -e GUACD_HOSTNAME=elo-guacd -e GUACAMOLE_HOME=/guachome -v elo-guac-home:/guachome guacamole/guacamole >/dev/null
+docker start elo-guacd elo-guacamole >/dev/null 2>&1 || true
+echo GUAC_STARTED`, 900);
+    if (!/GUAC_STARTED/.test(out)) throw new Error('could not start Guacamole: ' + out.trim().split('\n').pop());
+    port = +(((await x.sh(`docker port elo-guacamole 8080/tcp | head -1`, 30)).match(/:(\d+)\s*$/m) || [])[1]) || port;
+    const base = `http://127.0.0.1:${port}/guacamole`;
+    let token = '';
+    for (let k = 0; k < 40 && !token; k++) {   // the web app needs a little time to deploy
+      try {
+        const r = await fetch(base + '/api/tokens', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ username: g.user, password: g.password }), signal: AbortSignal.timeout(5000) });
+        if (r.ok) token = (await r.json()).authToken || '';
+      } catch {}
+      if (!token) await new Promise(r => setTimeout(r, 2500));
+    }
+    if (!token) throw new Error('Guacamole did not come up (docker logs elo-guacamole)');
+    const cid = Buffer.from(`${m.vm}\0c\0default`).toString('base64').replace(/=+$/, '');
+    return { ok: true, url: `${base}/#/client/${cid}?token=${token}`, home: `${base}/`, user: g.user, password: g.password };
+  }));
+  app.post('/api/rdp/web/stop', localOnly, wrap(async () => ({ ok: true, out: await x.sh('docker rm -f elo-guacamole elo-guacd 2>&1 | tr "\\n" " "', 60) })));
+
   // ── System of a machine: OS, license, hypervisor, installed databases (PostgreSQL / SQL Server) ──
   const tcpOpen = (host, port) => new Promise(r => { const c = net.connect({ host, port, timeout: 2000 }); c.on('connect', () => { c.destroy(); r(true); }); c.on('error', () => r(false)); c.on('timeout', () => { c.destroy(); r(false); }); });
   const LIC = ['Unlicensed', 'Licensed', 'Initial grace period', 'Additional grace period', 'Non-genuine grace period', 'Notification', 'Extended grace period'];

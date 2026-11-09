@@ -262,6 +262,7 @@ async function mvAcc(n) {
       ${ac.ok || local ? `<button class="btn small primary" onclick="openTerminal('${esc(termId(i))}','${esc(i.name)}')">&gt;_ ${t('acc.term')}</button>` : ''}
       ${w ? `<a class="btn small" href="/api/rdp/file?id=${encodeURIComponent(i.id)}" download>⬇ ${t('mv.rdpFile')}</a>
         <button class="btn small primary" onclick="mvRdp(${n}, 'open')">🖥 ${t('mv.rdpOpen')}</button>
+        <button class="btn small primary" onclick="mvRdpWeb(${n})">🌐 ${t('mv.rdpWeb')}</button>
         <button class="btn small" onclick="mvRdp(${n}, 'enable')">${t('mv.rdpEnable')}</button>` : ''}
       ${s && !local ? (d?.installed ? `<button class="btn small primary" onclick="mvDesk(${n}, 'open')">🖥 ${t('mv.deskOpen')}</button><button class="btn small" onclick="mvDesk(${n}, 'close')">${t('desk.close')}</button>`
         : `<button class="btn small" onclick="mvDesk(${n}, 'install')">🖥 ${t('mv.deskInstall')}</button>`) : ''}
@@ -273,6 +274,13 @@ async function mvRdp(n, what) {
   const i = MT.list[n], m = $('mv-amsg-' + n); m.textContent = t('m.working');
   const r = await api('/rdp/' + what, { id: i.id });
   m.innerHTML = r.ok ? `<span class="tok">✓ ${t(what === 'open' ? 'mv.rdpOpened' : 'mv.rdpEnabled')}</span>` : `<span class="tbad">${esc(r.error)}</span>`;
+}
+async function mvRdpWeb(n) {
+  const i = MT.list[n], m = $('mv-amsg-' + n); m.textContent = t('m.working');
+  const r = await api('/rdp/web', { id: i.id });
+  if (!r.ok) { m.innerHTML = '<span class="tbad">' + esc(r.error) + '</span>'; return; }
+  m.innerHTML = '<span class="tok">✓ Guacamole</span> <a href="' + esc(r.url) + '" target="_blank" rel="noopener">' + t('mv.rdpWeb') + '</a>';
+  window.open(r.url, '_blank');
 }
 async function mvDesk(n, what) {
   const i = MT.list[n], m = $('mv-amsg-' + n);
