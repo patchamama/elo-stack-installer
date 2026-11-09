@@ -1414,7 +1414,7 @@ app.post('/api/machine/elocreds', terminals.localOnly, wrap(async req => {
   let base = null;
   if (url) { const u = new URL(String(url)), ix = /^\/(ix-[^/]+|[^/]+)\//.exec(u.pathname + '/'); if (ix && ip) base = `${u.protocol}//${ip}:${u.port || (u.protocol === 'https:' ? 443 : 80)}/${ix[1]}/rest`; }
   if (base) {
-    const cands = defaults ? [['elo', 'elo'], ['Administrator', 'elo'], ['Administrator', 'Administrator']] : elo?.user ? [[elo.user, elo.password || '']] : [];
+    const cands = defaults ? [['Administrator', 'elo'], ['elo', 'elo'], ['Administrator', 'Administrator']] : elo?.user ? [[elo.user, elo.password || '']] : [];
     if (elo?.user && defaults) cands.unshift([elo.user, elo.password || '']);
     for (const [u, p] of cands) { const t = await ixLogin(base, u, p); out.eloTest = { ...t, user: u }; if (t.ok) { elo = { user: u, password: p }; break; } }
   }
