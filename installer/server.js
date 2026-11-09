@@ -1387,6 +1387,49 @@ const terminals = require('./terminal')({ app, wrap, SSH_KEY, VM_DIR: prov.VM_DI
 
 require('./elolinks')({ app, wrap, terminals, localOnly: terminals.localOnly });
 
+// ELO / database credentials of a machine, typed by the user and kept (same protected store as the machine access data).
+// Test systems usually have elo/elo for ELO and elodb/elodb for the databases: "defaults" tries those.
+const mstore = require('./machines');
+const ixLogin = async (base, user, password) => {
+  const r = await x.run('curl', ['-sk', '-m', '30', '-X', 'POST', '-H', 'Content-Type: application/json', '-d', JSON.stringify({ userName: user, userPwd: password, clientComputer: 'elo-installer', runAsUser: '' }), `${base}/IXServicePortIF/login`], { timeoutMs: 40000 });
+  let j; try { j = JSON.parse(r.out); } catch { return { ok: false, msg: (r.out || r.err || 'no answer').trim().slice(0, 120) }; }
+  const err = j.exception || j.error || (j.result ? null : 'no result');
+  return err ? { ok: false, msg: String(err.message || err.name || err).slice(0, 160) } : { ok: true };
+};
+const pgTest = async (host, port, user, password) => {
+  const psql = 'C:\\Program Files\\pgAdmin 4\\runtime\\psql.exe';
+  if (!fs.existsSync(psql)) return null;
+  const r = await x.run(psql, ['-h', host, '-p', String(port), '-U', user, '-d', 'postgres', '-tAc', 'select 1'], { env: { PGPASSWORD: password, PGCONNECT_TIMEOUT: '6' }, timeoutMs: 20000 });
+  return r.code === 0 ? { ok: true } : { ok: false, msg: (r.err || r.out).trim().split('\n').pop().slice(0, 160) };
+};
+app.get('/api/machine/elocreds', terminals.localOnly, wrap(async req => {
+  const r = mstore.get(String(req.query.id || '')) || {};
+  return { ok: true, elo: r.eloCreds || null, db: r.dbCreds || null };
+}));
+app.post('/api/machine/elocreds', terminals.localOnly, wrap(async req => {
+  const { id, url, defaults, pgPort = 5432 } = req.body || {};
+  if (!/^(hyperv|vbox|ssh|wsl):/.test(String(id)) && id !== 'wsl') throw new Error('bad machine');
+  let elo = req.body?.elo, db = req.body?.db;
+  const m = await terminals.resolve(id), ip = m.ip || m.ssh?.host, out = { ok: true };
+  let base = null;
+  if (url) { const u = new URL(String(url)), ix = /^\/(ix-[^/]+|[^/]+)\//.exec(u.pathname + '/'); if (ix && ip) base = `${u.protocol}//${ip}:${u.port || (u.protocol === 'https:' ? 443 : 80)}/${ix[1]}/rest`; }
+  if (base) {
+    const cands = defaults ? [['elo', 'elo'], ['Administrator', 'elo'], ['Administrator', 'Administrator']] : elo?.user ? [[elo.user, elo.password || '']] : [];
+    if (elo?.user && defaults) cands.unshift([elo.user, elo.password || '']);
+    for (const [u, p] of cands) { const t = await ixLogin(base, u, p); out.eloTest = { ...t, user: u }; if (t.ok) { elo = { user: u, password: p }; break; } }
+  }
+  if (ip && (defaults || db?.user)) {
+    const cands = defaults ? [['elodb', 'elodb']] : [[db.user, db.password || '']];
+    if (defaults && db?.user) cands.unshift([db.user, db.password || '']);
+    for (const [u, p] of cands) { const t = await pgTest(ip, pgPort, u, p); out.dbTest = t ? { ...t, user: u } : { skipped: true, user: u }; if (!t || t.ok) { db = { user: u, password: p }; break; } }
+  }
+  const rec = {};
+  if (elo?.user && (!out.eloTest || out.eloTest.ok || !defaults)) rec.eloCreds = { user: elo.user, password: elo.password || '' };
+  if (db?.user && (!out.dbTest || out.dbTest.ok || out.dbTest.skipped || !defaults)) rec.dbCreds = { user: db.user, password: db.password || '' };
+  if (Object.keys(rec).length) mstore.save(id, rec);
+  const cur = mstore.get(id) || {};
+  return { ...out, elo: cur.eloCreds || null, db: cur.dbCreds || null };
+}));
 // HTTP status of URLs as seen from this computer (self-signed certificates accepted): tells "answers" from "404 / refused".
 app.post('/api/probe', terminals.localOnly, wrap(async req => {
   const urls = (req.body?.urls || []).slice(0, 30), out = {};

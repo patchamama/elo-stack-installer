@@ -197,6 +197,7 @@ async function renderMachine(n) {
     <div id="mv-sys-${n}"></div>
     <div class="card" id="mv-acc-${n}"><b>${t('mv.access')}</b> <span class="muted">${ld('machine')}</span></div>
     <div id="mv-docker-${n}"></div><div id="mv-db-${n}"></div><div id="mv-elo-${n}"></div>`;
+  api('/machine/elocreds?id=' + encodeURIComponent(i.id)).then(r => { MT.cred = MT.cred || {}; MT.cred[n] = r; });
   mvRes(n); mvAcc(n); mvSys(n); mvDocker(n); mvElo(n);
 }
 // ── Resources ──
@@ -299,7 +300,7 @@ async function mvElo(n) {
     if (r.ok && !r.found) { el.innerHTML = `<div class="card"><b>ELO</b> <span class="muted">· ${t('mv.noElo')}</span></div>`; MT.elo = MT.elo || {}; MT.elo[n] = null; return; }
     if (!r.ok) { el.innerHTML = `<div class="card"><b>ELO</b> <span class="tbad">${esc(r.error)}</span></div>`; return; }
     // Windows installation of ELO (no Docker stack): the web apps come from the machine's own ELO configuration.
-    if (!insts.length && /^(hyperv|vbox):/.test(i.id)) { const nat = await mvEloNative(n, host); if (nat) { el.innerHTML = nat; return; } }
+    if (!insts.length && /^(hyperv|vbox):/.test(i.id)) { const nat = await mvEloNative(n, host); if (nat) { el.innerHTML = nat; mvCreds(n); return; } }
     if (!insts.length) insts = [{ instance: '', repo: 'repository', tag: '', ports: { server: 9090, as: 9060, flows: 9010, pgadmin: 5050 }, credentials: null }];
   }
   MT.elo = MT.elo || {}; MT.elo[n] = { host, insts };
@@ -361,14 +362,16 @@ async function mvSys(n) {
     <table>${rows}</table><div id="mv-dbmsg-${n}" class="muted" style="margin-top:4px"></div></div>` : '';
   MT.db = MT.db || {}; MT.db[n] = { host, ...db };
 }
+const mvDbCred = n => MT.cred?.[n]?.db || { user: 'elodb', password: 'elodb' };
 async function mvDbOpen(n, kind) {
   const d = MT.db?.[n], m = $('mv-dbmsg-' + n); m.textContent = t('m.working');
-  const r = kind === 'pg' ? await api('/db/pgadmin', { host: d.host, port: d.postgres.port, name: 'ELO ' + MT.list[n].name }) : await api('/db/mssql', { host: d.host, port: d.mssql.port });
+  const c = mvDbCred(n);
+  const r = kind === 'pg' ? await api('/db/pgadmin', { host: d.host, port: d.postgres.port, name: 'ELO ' + MT.list[n].name, user: c.user, password: c.password }) : await api('/db/mssql', { host: d.host, port: d.mssql.port, user: c.user });
   m.innerHTML = r.ok ? `<span class="tok">✓ ${esc(r.note || '')}</span>${kind === 'pg' ? ` <span class="muted">${t('mv.pgNote')}</span>` : ''}` : `<span class="tbad">${esc(r.error)}</span>`;
 }
 function mvDbCopy(n, k) {
   const d = MT.db?.[n]; if (!d) return;
-  const s = k === 'postgres' ? `postgresql://elodb:elodb@${d.host}:${d.postgres.port}/postgres` : `Server=${d.host},${d.mssql.port};User Id=elodb;Password=elodb;TrustServerCertificate=True`;
+  const c = mvDbCred(n), s = k === 'postgres' ? `postgresql://${encodeURIComponent(c.user)}:${encodeURIComponent(c.password)}@${d.host}:${d.postgres.port}/postgres` : `Server=${d.host},${d.mssql.port};User Id=${c.user};Password=${c.password};TrustServerCertificate=True`;
   navigator.clipboard?.writeText(s); $('mv-dbmsg-' + n).innerHTML = `<code>${esc(s)}</code> <span class="tok">✓ ${t('mv.copied')}</span>`;
 }
 // ── Docker of the local machine: containers and ports, stop / start / remove, ELO stacks ──
@@ -405,6 +408,36 @@ async function mvStack(n, action, name) {
   api('/installations').then(x => { CACHE.inst = x; syncMachineTabs(x); });
 }
 // ELO installed natively in Windows: its web apps (hostname replaced by the VM address) with the real HTTP answer of each.
+// Credentials the user knows for the ELO and the databases of a machine (kept in the protected store); defaults of test systems can be tried.
+async function mvCreds(n) {
+  const i = MT.list[n], el = $('mv-cred-' + n); if (!el) return;
+  const r = await api('/machine/elocreds?id=' + encodeURIComponent(i.id));
+  MT.cred = MT.cred || {}; MT.cred[n] = r;
+  const e = r.elo || {}, d = r.db || {}, inp = (id, v, ph, pw) => `<input id="mv-${id}-${n}" type="${pw ? 'password' : 'text'}" value="${esc(v || '')}" placeholder="${esc(ph)}" autocomplete="off" style="max-width:150px">`;
+  el.innerHTML = `<div class="card" style="margin:8px 0"><b>${t('mv.credTitle')}</b> <span class="muted">${t('mv.credNote')}</span>
+    <div class="row" style="gap:8px;margin-top:6px;flex-wrap:wrap"><span class="muted" style="min-width:60px">ELO</span>${inp('eu', e.user, t('m.user'))}${inp('ep', e.password, t('acc.password'), 1)}
+      <span class="muted" style="min-width:90px;margin-left:12px">${t('mv.database')}</span>${inp('du', d.user, t('m.user'))}${inp('dp', d.password, t('acc.password'), 1)}</div>
+    <div class="row" style="gap:8px;margin-top:6px"><button class="btn small primary" onclick="mvCredSave(${n}, false)">${t('mv.credSave')}</button><button class="btn small" onclick="mvCredSave(${n}, true)">${t('mv.credDefaults')}</button>
+      ${e.user ? `<button class="btn small" onclick="mvAddons(${n})">${t('mv.addons')}</button>` : ''}</div><div id="mv-credmsg-${n}" class="muted" style="margin-top:6px"></div></div>`;
+}
+async function mvCredSave(n, defaults) {
+  const i = MT.list[n], m = $('mv-credmsg-' + n), v = k => $('mv-' + k + '-' + n).value;
+  m.textContent = t('m.working');
+  const r = await api('/machine/elocreds', { id: i.id, url: MT.elo?.[n]?.testUrl, defaults, elo: { user: v('eu').trim(), password: v('ep') }, db: { user: v('du').trim(), password: v('dp') } });
+  if (!r.ok) { m.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
+  const line = (name, x) => x ? `<div>${x.skipped ? '<span class="muted">–</span>' : x.ok ? '<span class="tok">✔</span>' : '<span class="tbad">✗</span>'} ${name} <code>${esc(x.user || '')}</code> ${x.ok ? '' : x.skipped ? '<span class="muted">' + t('mv.notTested') + '</span>' : esc(x.msg || '')}</div>` : '';
+  await mvCreds(n);
+  $('mv-credmsg-' + n).innerHTML = line('ELO', r.eloTest) + line(t('mv.database'), r.dbTest) + (r.elo || r.db ? `<div class="tok">✓ ${t('mv.credSaved')}</div>` : '');
+}
+// Business Solutions / add-ons installed in the ELO of the machine (IX packages), with the saved ELO credentials.
+async function mvAddons(n) {
+  const i = MT.list[n], m = $('mv-credmsg-' + n), c = MT.cred?.[n]?.elo, url = MT.elo?.[n]?.testUrl;
+  if (!c || !url) return; m.textContent = t('adn.checking');
+  const r = await api('/elolinks/addons', { id: i.id, url, user: c.user, password: c.password });
+  if (!r.ok) { m.innerHTML = `<span class="tbad">${esc(r.error)}</span>`; return; }
+  if (!r.packagesApi) { m.innerHTML = `<span class="twarn">${t('adn.noApi')}</span>`; return; }
+  m.innerHTML = r.addons.map(a => `<span class="row" style="gap:5px;margin:2px 12px 2px 0;display:inline-flex" title="${esc(a.evidence.join(' '))}"><span class="dot ${a.found ? 'ok' : 'idle'}"></span>${esc(a.name)}${a.versions?.length ? ` <span class="muted">${esc(a.versions.join(', '))}</span>` : ''}</span>`).join('') + ` <span class="muted">(${t('adn.packagesN', { n: r.total })})</span>`;
+}
 async function mvEloNative(n, host) {
   const i = MT.list[n], r = await api('/elolinks/status', { id: i.id });
   if (!r.ok || !r.items) return null;
@@ -412,7 +445,7 @@ async function mvEloNative(n, host) {
   if (!web.length) return null;
   const tun0 = MT.tunnels?.[i.id];
   const fix = u => { try { const U = new URL(u); const p = +U.port || (U.protocol === 'https:' ? 443 : 80); if (tun0 && tun0[p]) { U.hostname = '127.0.0.1'; U.port = tun0[p]; } else U.hostname = host; return U.href; } catch { return u; } };
-  MT.elo = MT.elo || {}; MT.elo[n] = { host, insts: [], nativePorts: [...new Set(web.map(x => { try { const U = new URL(x.detail); return +U.port || (U.protocol === 'https:' ? 443 : 80); } catch { return 0; } }).filter(Boolean))] };
+  MT.elo = MT.elo || {}; MT.elo[n] = { host, insts: [], testUrl: (web.find(x => /\/ix-[^/]+\//.test(x.detail)) || {}).detail, nativePorts: [...new Set(web.map(x => { try { const U = new URL(x.detail); return +U.port || (U.protocol === 'https:' ? 443 : 80); } catch { return 0; } }).filter(Boolean))] };
   const urls = web.map(x => fix(x.detail)), pr = (await api('/probe', { urls })).results || {};
   const tun = tun0;
   const rows = web.map((x, k) => { const u = urls[k], p = pr[u] || {}, good = p.status && p.status < 400 || p.status === 401 || p.status === 403;
@@ -422,6 +455,7 @@ async function mvEloNative(n, host) {
   const sc = r.scan || {};
   return `<div class="card"><b>ELO</b> <span class="muted">· Windows · ${esc((sc.elo || []).join(', '))} · ${t('mv.repos')}: ${esc((sc.repos || []).join(', '))}</span>
     <p class="muted" style="margin:4px 0">${t('mv.nativeNote')}</p>
+    <div id="mv-cred-${n}"></div>
     <div class="row"><b>URLs</b>${bad ? `<span class="twarn">${t('mv.unreachable', { host: esc(host) })}</span><button class="btn small primary right" onclick="mvTunnel(${n}, true)">${t('mv.openTunnel')}</button>` : ''}</div>
     <div class="tablewrap"><table>${rows}</table></div><div id="mv-msg-${n}" class="muted"></div></div>
     <div class="card"><div class="row"><b>${t('mv.bs')}</b><button class="btn small right" onclick="mvBs(${n})">${t('mv.bsLoad')}</button>
